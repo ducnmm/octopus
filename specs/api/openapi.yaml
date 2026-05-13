@@ -1,0 +1,35 @@
+openapi: 3.1.0
+info:
+  title: GitWal API
+  version: 0.1.0
+paths:
+  /v1/auth/session:
+    post:
+      summary: Complete CLI login callback
+      responses:
+        "200":
+          description: Login completed
+  /v1/repos:
+    post:
+      summary: Create a repository
+      responses:
+        "201":
+          description: Repository created
+  /v1/repos/{owner}/{repo}/restore:
+    post:
+      summary: Restore a repository cache from Sui and Walrus
+      parameters:
+        - name: owner
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Restore started
+

@@ -1,0 +1,29 @@
+# Git HTTP Protocol
+
+GitWal should support normal Git HTTPS remotes:
+
+```bash
+git remote add origin https://gitwal.dev/owner/repo.git
+git push origin main
+git clone https://gitwal.dev/owner/repo.git
+```
+
+## Push Requirements
+
+On push, the server must:
+
+1. Authenticate the Git credential.
+2. Resolve credential to a Sui account/delegate.
+3. Check write permission.
+4. Receive the pack into the bare repo cache.
+5. Validate the result with Git tooling.
+6. Reject invalid or unauthorized ref updates.
+7. Create and upload a Walrus artifact.
+8. Anchor the new ref state on Sui.
+
+## Clone/Fetch Requirements
+
+On clone/fetch, the server should serve from local bare repo cache when available.
+
+If cache is missing, it must restore from Sui manifests and Walrus artifacts before serving.
+

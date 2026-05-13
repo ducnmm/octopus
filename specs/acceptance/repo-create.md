@@ -1,0 +1,19 @@
+# Acceptance: Repo Create
+
+## Scenario
+
+Given a user has logged in with `gitwal auth login`
+When they run:
+
+```bash
+gitwal repo create demo --private=false
+```
+
+Then:
+
+- the CLI signs the API request with its delegate key
+- the server verifies the delegate on Sui
+- a repo object is created on Sui
+- the repo appears in the web UI
+- the repo can be used as a Git remote
+

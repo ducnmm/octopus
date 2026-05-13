@@ -1,0 +1,39 @@
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Node/TS
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+coverage/
+
+# Rust/Move
+target/
+build/
+.move/
+
+# GitWal local runtime data
+data/
+tmp/
+.gitwal/
+
+# Secrets and credentials
+*.pem
+*.key
+credentials.json
+
