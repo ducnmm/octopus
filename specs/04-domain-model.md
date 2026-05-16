@@ -3,7 +3,7 @@
 ## On-Chain Objects
 
 ```move
-GitWalAccount
+OctopusAccount
 - owner
 - delegate_keys
 - repo_count

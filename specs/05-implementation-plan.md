@@ -4,19 +4,19 @@
 
 - [x] Create SDD folder structure
 - [x] Add vision, scope, architecture, protocols, acceptance specs
-- [ ] Choose implementation stack
-- [ ] Create dev scripts
+- [x] Choose implementation stack
+- [x] Create dev scripts
 
 ## Phase 1: Local Git Gateway
 
 Goal: prove normal Git can push/clone through the server.
 
-- [ ] Implement minimal server app
-- [ ] Serve Git HTTP endpoints
-- [ ] Store repos as local bare repo cache
-- [ ] Support `git push`
-- [ ] Support `git clone`
-- [ ] Add local e2e test for push/clone
+- [x] Implement minimal server app
+- [x] Serve Git HTTP endpoints
+- [x] Store repos as local bare repo cache
+- [x] Support `git push`
+- [x] Support `git clone`
+- [x] Add local e2e test for push/clone
 
 Relevant specs:
 
@@ -27,11 +27,11 @@ Relevant specs:
 
 Goal: every push produces a durable artifact.
 
-- [ ] Create bundle/pack artifact after push
-- [ ] Compute artifact digest
-- [ ] Upload artifact to Walrus
-- [ ] Store local dev fallback for Walrus if needed
-- [ ] Record artifact metadata
+- [x] Create bundle/pack artifact after push
+- [x] Compute artifact digest
+- [x] Upload artifact to Walrus through CLI mode
+- [x] Store local dev fallback for Walrus if needed
+- [x] Record artifact metadata
 
 Relevant specs:
 
@@ -42,12 +42,13 @@ Relevant specs:
 
 Goal: every pushed ref is anchored on Sui.
 
-- [ ] Implement Move package
-- [ ] Add account and delegate key objects
-- [ ] Add repo and ref state objects
-- [ ] Add `push_ref`
-- [ ] Emit `RefUpdated`
+- [x] Implement Move package
+- [x] Add account and delegate key objects
+- [x] Add repo and ref state objects
+- [x] Add `push_ref`
+- [x] Emit `RefUpdated`
 - [ ] Wire server to submit ref update transaction
+- [x] Wire server to local Sui-shaped registry mirror
 
 Relevant specs:
 
@@ -58,12 +59,12 @@ Relevant specs:
 
 Goal: delete cache and recover repo.
 
-- [ ] Query Sui manifests
-- [ ] Download Walrus artifacts
-- [ ] Verify artifact digest
-- [ ] Rebuild bare repo cache
+- [x] Query local Sui-shaped manifests
+- [x] Download Walrus artifacts through Aggregator or CLI
+- [x] Verify artifact digest from local Walrus fallback
+- [x] Rebuild bare repo cache from snapshot bundle
 - [ ] Reindex metadata
-- [ ] Prove clone works after restore
+- [x] Prove clone works after local fallback restore
 
 Relevant specs:
 
@@ -80,4 +81,3 @@ Goal: make the demo understandable.
 - [ ] File viewer
 - [ ] Commit list
 - [ ] Demo script
-

@@ -29,6 +29,6 @@ local client -> Seal encrypt Git artifact -> server receives ciphertext -> Walru
 Properties:
 
 - Server cannot read private source code
-- Requires `gitwal://`, a Git remote helper, or local proxy
+- Requires `octopus://`, a Git remote helper, or local proxy
 - Web private repo browsing must decrypt client-side
 

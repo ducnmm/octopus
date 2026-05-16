@@ -2,11 +2,11 @@
 
 ## Scenario
 
-Given a user has logged in with `gitwal auth login`
+Given a user has logged in with `octopus auth login`
 When they run:
 
 ```bash
-gitwal repo create demo --private=false
+octopus repo create demo --private=false
 ```
 
 Then:

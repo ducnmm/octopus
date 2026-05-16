@@ -1,6 +1,6 @@
 # Specs
 
-This directory is the source of truth for GitWal.
+This directory is the source of truth for Octopus.
 
 ## Workflow
 
@@ -26,6 +26,6 @@ This directory is the source of truth for GitWal.
 
 Use:
 
-- `GitWal` for product and type names
-- `gitwal` for CLI, domains, config directories, and protocol names
+- `Octopus` for product and type names
+- `octopus` for CLI, domains, config directories, and protocol names
 

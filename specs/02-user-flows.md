@@ -3,19 +3,19 @@
 ## Login
 
 ```bash
-gitwal auth login
+octopus auth login
 ```
 
 Flow:
 
 1. CLI generates a local Ed25519 delegate key.
 2. CLI starts a localhost callback server.
-3. CLI opens the browser at `https://gitwal.dev/login?port=...&pubkey=...&address=...`.
+3. CLI opens the browser at `https://octopus.dev/login?port=...&pubkey=...&address=...`.
 4. User connects a Sui wallet.
-5. Web app creates `GitWalAccount` if needed.
+5. Web app creates `OctopusAccount` if needed.
 6. Web app calls Move `add_delegate_key`.
 7. Browser redirects to the CLI callback.
-8. CLI stores credentials in `~/.gitwal/credentials.json`.
+8. CLI stores credentials in `~/.octopus/credentials.json`.
 
 Auth model:
 
@@ -28,7 +28,7 @@ Git token/credential = Git HTTPS compatibility
 ## Create Repo
 
 ```bash
-gitwal repo create my-repo --private=false
+octopus repo create my-repo --private=false
 ```
 
 The CLI calls the server API with a delegate signature. The server verifies the delegate key against Sui, then creates the repo object.
@@ -36,13 +36,13 @@ The CLI calls the server API with a delegate signature. The server verifies the 
 ## Push
 
 ```bash
-git remote add origin https://gitwal.dev/ducnmm/my-repo.git
+git remote add origin https://octopus.dev/ducnmm/my-repo.git
 git push origin main
 ```
 
 Flow:
 
-1. Git client pushes over HTTPS to the GitWal server.
+1. Git client pushes over HTTPS to the Octopus server.
 2. Server authenticates with Git token or SSH key.
 3. Server receives the Git pack into a local bare repo cache.
 4. Server validates repository data with Git tooling.
@@ -54,7 +54,7 @@ Flow:
 ## Clone
 
 ```bash
-git clone https://gitwal.dev/ducnmm/my-repo.git
+git clone https://octopus.dev/ducnmm/my-repo.git
 ```
 
 Normal path: the server serves from local bare repo cache.

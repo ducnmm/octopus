@@ -1,11 +1,11 @@
 # Git HTTP Protocol
 
-GitWal should support normal Git HTTPS remotes:
+Octopus should support normal Git HTTPS remotes:
 
 ```bash
-git remote add origin https://gitwal.dev/owner/repo.git
+git remote add origin https://octopus.dev/owner/repo.git
 git push origin main
-git clone https://gitwal.dev/owner/repo.git
+git clone https://octopus.dev/owner/repo.git
 ```
 
 ## Push Requirements

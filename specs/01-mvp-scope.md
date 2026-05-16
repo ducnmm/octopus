@@ -2,8 +2,8 @@
 
 ## In Scope
 
-1. `gitwal auth login`
-2. `gitwal repo create`
+1. `octopus auth login`
+2. `octopus repo create`
 3. Git HTTP support for `git push` and `git clone`
 4. Local bare repository cache
 5. Git bundle or pack artifact upload to Walrus
@@ -27,7 +27,7 @@
 - Full PR review system
 - Full issue tracker
 - CI pipeline
-- Advanced zero-trust `gitwal://` remote helper
+- Advanced zero-trust `octopus://` remote helper
 - GitHub import/export
 - Organization/team permission model
 - On-chain Git DAG verification
@@ -37,9 +37,9 @@
 The MVP is successful when:
 
 1. A developer pushes a repo with normal Git.
-2. GitWal uploads a durable artifact to Walrus.
-3. GitWal writes a Sui manifest for the pushed ref.
+2. Octopus uploads a durable artifact to Walrus.
+3. Octopus writes a Sui manifest for the pushed ref.
 4. The local bare repo cache is deleted.
-5. GitWal restores the repo from Sui + Walrus.
+5. Octopus restores the repo from Sui + Walrus.
 6. `git clone` works and the commit hash matches the original repo.
 

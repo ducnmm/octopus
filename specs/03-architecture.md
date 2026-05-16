@@ -1,10 +1,10 @@
 # Architecture
 
 ```text
-Git CLI / Web UI / GitWal CLI
+Git CLI / Web UI / Octopus CLI
       |
       v
-GitWal Server
+Octopus Server
   - Git HTTP/SSH gateway
   - local bare repo cache
   - API

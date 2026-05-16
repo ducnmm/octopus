@@ -1,6 +1,6 @@
 # Restore Flow
 
-Restore proves GitWal's core thesis: the server cache is rebuildable.
+Restore proves Octopus's core thesis: the server cache is rebuildable.
 
 ## Inputs
 

@@ -1,8 +1,18 @@
 openapi: 3.1.0
 info:
-  title: GitWal API
+  title: Octopus API
   version: 0.1.0
 paths:
+  /healthz:
+    get:
+      summary: Server health check
+      responses:
+        "200":
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
   /v1/auth/session:
     post:
       summary: Complete CLI login callback
@@ -12,9 +22,19 @@ paths:
   /v1/repos:
     post:
       summary: Create a repository
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRepoRequest"
       responses:
         "201":
           description: Repository created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepoSummary"
   /v1/repos/{owner}/{repo}/restore:
     post:
       summary: Restore a repository cache from Sui and Walrus
@@ -30,6 +50,191 @@ paths:
           schema:
             type: string
       responses:
-        "202":
-          description: Restore started
-
+        "200":
+          description: Repository cache restored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreResponse"
+  /v1/repos/{owner}/{repo}/manifests:
+    get:
+      summary: List local artifact manifests for a repository
+      parameters:
+        - name: owner
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Artifact manifests
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - manifests
+                properties:
+                  manifests:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PackManifest"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - ok
+        - service
+      properties:
+        ok:
+          type: boolean
+        service:
+          type: string
+    CreateRepoRequest:
+      type: object
+      required:
+        - owner
+        - name
+      properties:
+        owner:
+          type: string
+          pattern: "^[A-Za-z0-9._-]+$"
+        name:
+          type: string
+          pattern: "^[A-Za-z0-9._-]+$"
+        visibility:
+          type: string
+          enum:
+            - public
+            - private
+          default: public
+    RepoSummary:
+      type: object
+      required:
+        - owner
+        - name
+        - visibility
+        - gitRemotePath
+      properties:
+        owner:
+          type: string
+        name:
+          type: string
+        visibility:
+          type: string
+          enum:
+            - public
+            - private
+        gitRemotePath:
+          type: string
+        registryMode:
+          type: string
+          enum:
+            - local
+        repoObjectId:
+          type: string
+          description: Local registry mode uses local:{sha256-prefix}; live Sui will use an object ID.
+    PackManifest:
+      type: object
+      required:
+        - manifestId
+        - repoId
+        - owner
+        - repo
+        - refName
+        - newCommit
+        - walrusBlobId
+        - artifactDigest
+        - artifactSizeBytes
+        - artifactPath
+        - isSnapshot
+        - createdAtMs
+        - seq
+      properties:
+        manifestId:
+          type: string
+        repoId:
+          type: string
+        owner:
+          type: string
+        repo:
+          type: string
+        refName:
+          type: string
+        oldCommit:
+          type:
+            - string
+            - "null"
+        newCommit:
+          type: string
+        walrusBlobId:
+          type: string
+          description: Local fallback uses local:{sha256}; real Walrus will use a Walrus blob ID.
+        walrusBlobObjectId:
+          type: string
+        artifactDigest:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+        artifactSizeBytes:
+          type: integer
+          minimum: 0
+        artifactPath:
+          type: string
+        storageMode:
+          type: string
+          enum:
+            - local
+            - walrus-cli
+        isSnapshot:
+          type: boolean
+        createdAtMs:
+          type: integer
+        seq:
+          type: integer
+    RestoreResponse:
+      type: object
+      required:
+        - owner
+        - repo
+        - repoPath
+        - manifestId
+        - refName
+        - restoredCommit
+        - artifactDigest
+        - artifactPath
+        - storageMode
+        - manifestSource
+      properties:
+        owner:
+          type: string
+        repo:
+          type: string
+        repoPath:
+          type: string
+        manifestId:
+          type: string
+        refName:
+          type: string
+        restoredCommit:
+          type: string
+        artifactDigest:
+          type: string
+        artifactPath:
+          type: string
+        storageMode:
+          type: string
+          enum:
+            - local
+            - walrus-cli
+            - walrus-aggregator
+        manifestSource:
+          type: string
+          enum:
+            - sui-local
+            - artifact-fallback

@@ -1,0 +1,10 @@
+[package]
+name = "octopus"
+edition = "2024"
+license = "MIT"
+authors = ["Octopus contributors"]
+
+[dependencies]
+
+[addresses]
+octopus = "0x0"

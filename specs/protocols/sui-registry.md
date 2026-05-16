@@ -2,6 +2,10 @@
 
 Sui anchors repo identity, account ownership, permissions, ref state, and artifact manifests.
 
+The current server implementation has a local registry adapter that writes the
+same repo/ref/manifest shape to `data/sui/repos` during development. Live Sui
+transaction submission will replace that adapter once the package is published.
+
 ## Entry Functions
 
 ```move
@@ -36,3 +40,15 @@ Git validity stays off-chain:
 - branch protection
 - file size limits
 
+## MVP Contract Shape
+
+- `octopus::account::AccountRegistry`
+- `octopus::account::OctopusAccount`
+- `octopus::registry::RepoRegistry`
+- `octopus::registry::Repo`
+- `octopus::registry::RefState`
+- `octopus::registry::PackManifest`
+
+For first-push refs, the empty string represents no previous commit. Off-chain
+Git validation remains responsible for mapping that to `null` in HTTP/API
+responses.

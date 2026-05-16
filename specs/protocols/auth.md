@@ -5,7 +5,7 @@
 Command:
 
 ```bash
-gitwal auth login
+octopus auth login
 ```
 
 The CLI generates a local delegate key and asks the user to approve it through a Sui wallet.
@@ -36,5 +36,5 @@ Server verification:
 
 ## Git Compatibility
 
-Normal Git HTTPS cannot sign Sui wallet messages on every push. GitWal uses Git tokens or SSH keys for Git protocol compatibility, then maps those credentials back to Sui-owned accounts.
+Normal Git HTTPS cannot sign Sui wallet messages on every push. Octopus uses Git tokens or SSH keys for Git protocol compatibility, then maps those credentials back to Sui-owned accounts.
 

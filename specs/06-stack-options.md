@@ -2,7 +2,7 @@
 
 This file records stack choices before implementation.
 
-## Recommended Hackathon Stack
+## Decision: Hackathon Stack
 
 Use TypeScript for the off-chain apps:
 
@@ -28,7 +28,7 @@ Good candidates:
 - Hono: lightweight and fast
 - Express: familiar but less structured
 
-Recommended: Fastify for the server unless the web app framework makes another choice easier.
+Decision: Fastify for the server.
 
 ## CLI Options
 
@@ -38,7 +38,7 @@ Good candidates:
 - Yargs
 - Clipanion
 
-Recommended: Commander for MVP simplicity.
+Decision: Commander for MVP simplicity.
 
 ## Git Integration Options
 
@@ -64,4 +64,3 @@ Later:
 - symbol index
 - semantic README/docs search
 - AI code search
-
