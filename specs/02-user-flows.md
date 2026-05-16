@@ -28,7 +28,7 @@ Git token/credential = Git HTTPS compatibility
 ## Create Repo
 
 ```bash
-octopus repo create my-repo --private=false
+octopus repo create my-repo --public
 ```
 
 The CLI calls the server API with a delegate signature. The server verifies the delegate key against Sui, then creates the repo object.
@@ -66,4 +66,3 @@ Restore path:
 3. Server verifies artifact digests.
 4. Server rebuilds the bare repo cache.
 5. Server serves clone/fetch.
-

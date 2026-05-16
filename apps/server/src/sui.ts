@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { PackManifest } from "./artifacts.js";
 import type { ServerConfig } from "./config.js";
@@ -155,6 +155,41 @@ export const readSuiRepoState = async (
   repo: string
 ): Promise<SuiRepoState | null> => {
   return await readRepoStateFile(config, owner, repo);
+};
+
+export const listSuiRepoStates = async (config: ServerConfig): Promise<SuiRepoState[]> => {
+  const root = join(config.dataDir, "sui", "repos");
+
+  try {
+    const owners = await readdir(root, { withFileTypes: true });
+    const states: SuiRepoState[] = [];
+
+    for (const ownerEntry of owners) {
+      if (!ownerEntry.isDirectory()) {
+        continue;
+      }
+
+      const owner = ownerEntry.name;
+      const repos = await readdir(join(root, owner), { withFileTypes: true });
+      for (const repoEntry of repos) {
+        if (!repoEntry.isFile() || !repoEntry.name.endsWith(".json")) {
+          continue;
+        }
+
+        const repo = repoEntry.name.slice(0, -".json".length);
+        const state = await readRepoStateFile(config, owner, repo);
+        if (state) {
+          states.push(state);
+        }
+      }
+    }
+
+    return states.sort(
+      (a, b) => b.updatedAtMs - a.updatedAtMs || a.repoId.localeCompare(b.repoId)
+    );
+  } catch {
+    return [];
+  }
 };
 
 export const readSuiRepoManifests = async (

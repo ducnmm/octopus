@@ -6,7 +6,7 @@ Given a user has logged in with `octopus auth login`
 When they run:
 
 ```bash
-octopus repo create demo --private=false
+octopus repo create demo --public
 ```
 
 Then:
@@ -17,3 +17,8 @@ Then:
 - the repo appears in the web UI
 - the repo can be used as a Git remote
 
+Visibility flags:
+
+- `--public` creates a public repo.
+- `--private` creates a private repo.
+- `--private=false` remains accepted as compatibility syntax for older examples.

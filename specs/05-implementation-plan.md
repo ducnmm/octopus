@@ -75,8 +75,8 @@ Relevant specs:
 
 Goal: make the demo understandable.
 
-- [ ] Minimal CLI commands
-- [ ] Minimal web UI repo list
+- [x] Minimal CLI commands
+- [x] Minimal web UI repo list
 - [ ] File tree
 - [ ] File viewer
 - [ ] Commit list

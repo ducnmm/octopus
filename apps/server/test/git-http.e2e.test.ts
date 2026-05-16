@@ -51,6 +51,10 @@ afterEach(async () => {
 });
 
 test("serves normal git push and clone through smart HTTP", async () => {
+  const emptyRepoListResponse = await fetch(new URL("/v1/repos", baseUrl));
+  expect(emptyRepoListResponse.status).toBe(200);
+  await expect(emptyRepoListResponse.json()).resolves.toEqual({ repos: [] });
+
   const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
     method: "POST",
     headers: {
@@ -64,6 +68,32 @@ test("serves normal git push and clone through smart HTTP", async () => {
   });
 
   expect(createResponse.status).toBe(201);
+
+  const createdRepoListResponse = await fetch(new URL("/v1/repos", baseUrl));
+  expect(createdRepoListResponse.status).toBe(200);
+  const createdRepoListBody = (await createdRepoListResponse.json()) as {
+    repos: Array<{
+      owner: string;
+      name: string;
+      repoId: string;
+      visibility: "public" | "private";
+      gitRemotePath: string;
+      defaultBranchCommit: string | null;
+      refCount: number;
+      manifestCount: number;
+    }>;
+  };
+  expect(createdRepoListBody.repos).toHaveLength(1);
+  expect(createdRepoListBody.repos[0]).toMatchObject({
+    owner: "ducnmm",
+    name: "demo",
+    repoId: "ducnmm/demo",
+    visibility: "public",
+    gitRemotePath: "/ducnmm/demo.git",
+    defaultBranchCommit: null,
+    refCount: 0,
+    manifestCount: 0
+  });
 
   const sourceRepo = join(workspace, "source");
   const cloneRepo = join(workspace, "clone");
@@ -111,6 +141,31 @@ test("serves normal git push and clone through smart HTTP", async () => {
     seq: 1
   });
   expect(manifest?.walrusBlobId).toBe(`local:${manifest?.artifactDigest}`);
+
+  const pushedRepoListResponse = await fetch(new URL("/v1/repos", baseUrl));
+  expect(pushedRepoListResponse.status).toBe(200);
+  const pushedRepoListBody = (await pushedRepoListResponse.json()) as {
+    repos: Array<{
+      repoId: string;
+      defaultBranchCommit: string | null;
+      refCount: number;
+      manifestCount: number;
+    }>;
+  };
+  expect(pushedRepoListBody.repos[0]).toMatchObject({
+    repoId: "ducnmm/demo",
+    defaultBranchCommit: pushedCommit,
+    refCount: 1,
+    manifestCount: 1
+  });
+
+  const webResponse = await fetch(new URL("/", baseUrl));
+  expect(webResponse.status).toBe(200);
+  expect(webResponse.headers.get("content-type")).toContain("text/html");
+  const webBody = await webResponse.text();
+  expect(webBody).toContain("Octopus Repositories");
+  expect(webBody).toContain("ducnmm/demo");
+  expect(webBody).toContain(pushedCommit.slice(0, 12));
 
   const suiState = await readSuiRepoState(
     {

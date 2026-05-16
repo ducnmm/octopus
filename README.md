@@ -36,6 +36,8 @@ Run the local server:
 pnpm dev:server
 ```
 
+Open `http://127.0.0.1:18787/` to view the minimal repository list UI.
+
 By default pushed artifacts are cached locally under `data/walrus/blobs`. To also
 store pushed bundles through a local Walrus CLI, set:
 
@@ -57,7 +59,7 @@ transactions.
 Create a local bare repo through the CLI:
 
 ```bash
-pnpm octopus repo create demo --owner ducnmm
+pnpm octopus repo create demo --owner ducnmm --public
 ```
 
 After a successful push, list generated artifact manifests:
@@ -80,13 +82,13 @@ cd contracts/sui && sui move test
 ```bash
 octopus auth login
 octopus repo create demo
-git remote add origin https://localhost:8787/ducnmm/demo.git
+git remote add origin http://127.0.0.1:18787/ducnmm/demo.git
 git push origin main
 
 rm -rf ./data/repos/ducnmm/demo.git
 
 octopus repo restore ducnmm/demo
-git clone https://localhost:8787/ducnmm/demo.git restored-demo
+git clone http://127.0.0.1:18787/ducnmm/demo.git restored-demo
 ```
 
 Expected result: the restored clone has the same Git commit hash as the original repository.
@@ -95,4 +97,4 @@ Expected result: the restored clone has the same Git commit hash as the original
 
 - Implemented: local Git HTTP push/clone, bare repo cache, snapshot bundle artifacts, SHA-256 manifests, local Sui registry mirror, restore from Sui-shaped manifests, Walrus CLI upload mode, and Walrus Aggregator download mode.
 - Scaffolded: Sui Move package with account, delegate, repo, ref state, and `push_ref` objects/functions.
-- Not yet implemented: wallet login, live Sui transaction submission, live Sui manifest query during restore, and product UI/indexer surfaces.
+- Not yet implemented: wallet login, live Sui transaction submission, live Sui manifest query during restore, file browser, commit list, and indexer surfaces.

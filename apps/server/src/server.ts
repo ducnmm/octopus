@@ -5,7 +5,8 @@ import { readRepoManifests } from "./artifacts.js";
 import type { ServerConfig } from "./config.js";
 import { handleGitHttp, initBareRepository } from "./git.js";
 import { restoreRepository } from "./restore.js";
-import { ensureSuiRepo } from "./sui.js";
+import { ensureSuiRepo, listSuiRepoStates } from "./sui.js";
+import { renderRepoListPage, toRepoListItem } from "./web.js";
 
 export const buildServer = (config: ServerConfig) => {
   const app = Fastify({
@@ -25,6 +26,17 @@ export const buildServer = (config: ServerConfig) => {
     ok: true,
     service: "octopus-server"
   }));
+
+  app.get("/", async (_request, reply) => {
+    const repos = (await listSuiRepoStates(config)).map(toRepoListItem);
+    await reply.type("text/html; charset=utf-8").send(renderRepoListPage(repos));
+  });
+
+  app.get("/v1/repos", async () => {
+    return {
+      repos: (await listSuiRepoStates(config)).map(toRepoListItem)
+    };
+  });
 
   app.post("/v1/repos", async (request, reply) => {
     const input = createRepoRequestSchema.parse(request.body);

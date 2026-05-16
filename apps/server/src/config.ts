@@ -16,7 +16,7 @@ export const loadConfig = (): ServerConfig => {
 
   return {
     host: process.env.OCTOPUS_HOST ?? "127.0.0.1",
-    port: envInt(process.env.OCTOPUS_PORT, 8787),
+    port: envInt(process.env.OCTOPUS_PORT, 18787),
     dataDir,
     repoRoot: resolve(dataDir, "repos"),
     suiMode: "local",

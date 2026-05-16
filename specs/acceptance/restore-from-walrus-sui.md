@@ -18,6 +18,5 @@ Then:
 - Octopus downloads the required artifacts from Walrus
 - Octopus verifies artifact digests
 - Octopus rebuilds the local bare repo cache
-- `git clone https://localhost:8787/ducnmm/demo.git restored-demo` succeeds
+- `git clone http://127.0.0.1:18787/ducnmm/demo.git restored-demo` succeeds
 - the restored repo commit hash equals the original pushed commit hash
-

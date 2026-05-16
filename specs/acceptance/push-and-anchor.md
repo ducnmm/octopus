@@ -7,7 +7,7 @@ And a user has write permission
 When they run:
 
 ```bash
-git remote add origin https://localhost:8787/ducnmm/demo.git
+git remote add origin http://127.0.0.1:18787/ducnmm/demo.git
 git push origin main
 ```
 
@@ -19,4 +19,3 @@ Then:
 - the server uploads a Git artifact to Walrus
 - the server writes a Sui `PackManifest`
 - the Sui ref state points to the pushed commit
-
