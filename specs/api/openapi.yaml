@@ -191,6 +191,7 @@ components:
           enum:
             - local
             - walrus-cli
+            - walrus-relay
         isSnapshot:
           type: boolean
         createdAtMs:

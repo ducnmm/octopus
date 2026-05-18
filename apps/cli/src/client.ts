@@ -9,7 +9,7 @@ export const requestJson = async <T>(url: string, init: RequestJsonOptions): Pro
   const response = await fetchImpl(url, {
     ...requestInit,
     headers: {
-      "content-type": "application/json",
+      ...(requestInit.body ? { "content-type": "application/json" } : {}),
       ...(requestInit.headers ?? {})
     }
   });

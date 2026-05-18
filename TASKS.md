@@ -10,7 +10,9 @@
 
 ## MVP Demo
 
-- [ ] `octopus auth login`
+- [x] `octopus auth login`
+- [x] `octopus repo connect owner/repo`
+- [x] Delegate headers for Git smart HTTP push
 - [x] `octopus repo create demo` local bare repo path
 - [x] Git push to local server
 - [x] Create local Git bundle artifact for push
@@ -21,11 +23,13 @@
 - [x] Download Walrus blob via Aggregator for restore
 - [x] Clone restored repo
 - [x] Restore from local Sui registry + Walrus fallback
+- [x] Sui testnet adapter scaffold for delegate verification/create_repo/push_ref
+- [x] Private repo artifact encryption in local mode
+- [x] Postgres schema for testnet metadata tables
 
 ## Open Questions
 
 - Which Walrus environment should the MVP target?
-- Should demo use Sui testnet or localnet first?
-- Should the server submit Sui transactions directly or sponsor delegate-key transactions?
+- Should the first live demo use direct delegate-key transactions or sponsored PTBs?
 - Is SSH support required for the first demo, or is HTTPS enough?
 - Should the first artifact format be Git bundle or raw pack?

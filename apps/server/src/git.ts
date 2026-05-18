@@ -3,9 +3,11 @@ import { access, mkdir } from "node:fs/promises";
 import { dirname, normalize, resolve, sep } from "node:path";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ownerNameSchema, repoNameSchema } from "@octopus/shared";
+import { parseDelegateAuth, type AuthContext } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import { createPushArtifacts, listRefs } from "./artifacts.js";
-import { anchorPushManifests } from "./sui.js";
+import { anchorPushManifests, canReadRepo, canWriteRepo, readSuiRepoStateForAuthorization } from "./sui.js";
+import { recordPushAttempt } from "./push-attempts.js";
 
 type GitResult = {
   stdout: Buffer;
@@ -156,6 +158,56 @@ export const handleGitHttp = async (
   }
 
   const isReceivePack = request.method === "POST" && url.pathname.endsWith("/git-receive-pack");
+  const isReceivePackRequest =
+    isReceivePack ||
+    (request.method === "GET" &&
+      url.pathname.endsWith("/info/refs") &&
+      url.searchParams.get("service") === "git-receive-pack");
+  const isUploadPackRequest =
+    request.method === "POST" && url.pathname.endsWith("/git-upload-pack") ||
+    (request.method === "GET" &&
+      url.pathname.endsWith("/info/refs") &&
+      url.searchParams.get("service") === "git-upload-pack");
+  const repoStateResult = await readSuiRepoStateForAuthorization(config, repoRef.owner, repoRef.repo);
+  if (config.suiMode === "testnet" && !repoStateResult.authoritative) {
+    await reply.code(503).send({ error: "Repository authorization state is temporarily unavailable" });
+    return;
+  }
+
+  if (config.suiMode === "testnet" && !repoStateResult.state) {
+    await reply.code(404).send({ error: "Repository state not found" });
+    return;
+  }
+
+  const repoState = repoStateResult.state;
+  let auth: AuthContext | null = null;
+
+  if (isReceivePackRequest) {
+    try {
+      auth = await parseDelegateAuth(config, request);
+    } catch (error) {
+      await reply.code(401).send({ error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+
+    if (repoState && !canWriteRepo(repoState, auth)) {
+      await reply.code(403).send({ error: "Not authorized to push to this repository" });
+      return;
+    }
+  } else if (repoState?.visibility === "private" && isUploadPackRequest) {
+    try {
+      auth = await parseDelegateAuth(config, request);
+    } catch (error) {
+      await reply.code(401).send({ error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+
+    if (!canReadRepo(repoState, auth)) {
+      await reply.code(403).send({ error: "Not authorized to read this repository" });
+      return;
+    }
+  }
+
   const beforeRefs = isReceivePack ? await listRefs(repoPath) : null;
   const body = await readRequestBody(request);
   const env = {
@@ -196,21 +248,54 @@ export const handleGitHttp = async (
 
   if (isReceivePack && statusCode >= 200 && statusCode < 300 && beforeRefs) {
     const afterRefs = await listRefs(repoPath);
-    const manifests = await createPushArtifacts({
-      dataDir: config.dataDir,
-      repoPath,
-      owner: repoRef.owner,
-      repo: repoRef.repo,
-      beforeRefs,
-      afterRefs
-    });
+    try {
+      const manifests = await createPushArtifacts({
+        dataDir: config.dataDir,
+        repoPath,
+        owner: repoRef.owner,
+        repo: repoRef.repo,
+        beforeRefs,
+        afterRefs,
+        visibility: repoState?.visibility ?? "public",
+        repoObjectId: repoState?.repoObjectId,
+        packageId: config.suiPackageId,
+        accountId: auth?.accountId,
+        sealMode: config.sealMode,
+        walrusNetwork: config.walrusNetwork,
+        walrusUploadRelayUrl: config.walrusUploadRelayUrl,
+        suiRpcUrl: config.suiRpcUrl,
+        suiNetwork: config.suiNetwork,
+        serverSuiPrivateKeys: config.serverSuiPrivateKeys,
+        sealServerConfigs: config.sealServerConfigs,
+        sealKeyServers: config.sealKeyServers,
+        sealThreshold: config.sealThreshold
+      });
 
-    if (manifests.length > 0) {
-      const anchors = await anchorPushManifests(config, manifests);
-      reply.header("x-octopus-manifest-count", String(manifests.length));
-      reply.header("x-octopus-artifact-digest", manifests[0]?.artifactDigest ?? "");
-      reply.header("x-octopus-anchor-count", String(anchors.length));
-      reply.header("x-octopus-registry-mode", anchors[0]?.registryMode ?? config.suiMode);
+      if (manifests.length > 0) {
+        const anchors = await anchorPushManifests(config, manifests, auth);
+        await recordPushAttempt(config, {
+          owner: repoRef.owner,
+          repo: repoRef.repo,
+          status: "completed",
+          manifestIds: manifests.map((manifest) => manifest.manifestId),
+          actor: auth?.walletAddress,
+          createdAtMs: Date.now()
+        });
+        reply.header("x-octopus-manifest-count", String(manifests.length));
+        reply.header("x-octopus-artifact-digest", manifests[0]?.artifactDigest ?? "");
+        reply.header("x-octopus-anchor-count", String(anchors.length));
+        reply.header("x-octopus-registry-mode", anchors[0]?.registryMode ?? config.suiMode);
+      }
+    } catch (error) {
+      await recordPushAttempt(config, {
+        owner: repoRef.owner,
+        repo: repoRef.repo,
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+        actor: auth?.walletAddress,
+        createdAtMs: Date.now()
+      });
+      throw error;
     }
   }
 

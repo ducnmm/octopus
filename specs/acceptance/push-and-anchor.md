@@ -7,7 +7,7 @@ And a user has write permission
 When they run:
 
 ```bash
-git remote add origin http://127.0.0.1:18787/ducnmm/demo.git
+git remote add origin http://127.0.0.1:48787/ducnmm/demo.git
 git push origin main
 ```
 

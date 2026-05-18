@@ -9,6 +9,7 @@
     "build": "pnpm -r build",
     "check": "pnpm --filter @octopus/shared build && pnpm -r check",
     "dev:server": "pnpm --filter @octopus/shared build && pnpm --filter @octopus/server dev",
+    "dev:web": "pnpm --filter @octopus/web dev",
     "octopus": "pnpm --filter @octopus/shared build && pnpm --filter @octopus/cli start",
     "test": "pnpm --filter @octopus/shared build && pnpm -r test"
   },

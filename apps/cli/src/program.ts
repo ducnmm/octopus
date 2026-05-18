@@ -1,7 +1,18 @@
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { execFile, spawn } from "node:child_process";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { platform } from "node:os";
 import { Command, InvalidArgumentError } from "commander";
-import { createRepoRequestSchema } from "@octopus/shared";
+import {
+  authCallbackRequestSchema,
+  createRepoRequestSchema,
+  delegateAuthHeaders,
+  type OctopusCredentials
+} from "@octopus/shared";
 import { requestJson, type OctopusFetch } from "./client.js";
-import { credentialsPath } from "./credentials.js";
+import { credentialsPath, deleteCredentials, readCredentials, writeCredentials } from "./credentials.js";
+import { createDelegateAuthToken, generateDelegateIdentity, identityFromPrivateKey } from "./delegate.js";
+import { loadDotenv } from "./env.js";
 
 export type CliIO = {
   stdout: Pick<NodeJS.WriteStream, "write">;
@@ -11,7 +22,9 @@ export type CliIO = {
 export type CliContext = CliIO & {
   env: NodeJS.ProcessEnv;
   fetch: OctopusFetch;
+  cwd?: string;
   home?: string;
+  openBrowser?: (url: string) => void;
 };
 
 type RepoCreateOptions = {
@@ -25,8 +38,39 @@ type RepoServerOptions = {
   server: string;
 };
 
+type AuthLoginOptions = {
+  server: string;
+  webUrl: string;
+  callbackPort?: string;
+  timeoutMs?: string;
+  delegatePrivateKey?: string;
+  packageId?: string;
+  accountRegistryId?: string;
+  repoRegistryId?: string;
+  browser?: boolean;
+};
+
+type RepoConnectOptions = {
+  remote: string;
+  server: string;
+};
+
+type AuthServerConfig = {
+  suiMode: "local" | "testnet";
+  suiNetwork: string;
+  suiRpcUrl: string;
+  packageId?: string;
+  accountRegistryId?: string;
+  repoRegistryId?: string;
+  serverDelegatePublicKey?: string;
+  serverDelegateAddress?: string;
+};
+
+const REST_AUTH_EXPIRES_IN_MS = 5 * 60 * 1000;
+const GIT_AUTH_EXPIRES_IN_MS = 30 * 24 * 60 * 60 * 1000;
+
 const defaultBaseUrl = (env: NodeJS.ProcessEnv): string => {
-  return `http://${env.OCTOPUS_HOST ?? "127.0.0.1"}:${env.OCTOPUS_PORT ?? "18787"}`;
+  return `http://${env.OCTOPUS_HOST ?? "127.0.0.1"}:${env.OCTOPUS_PORT ?? "48787"}`;
 };
 
 const writeLine = (stream: Pick<NodeJS.WriteStream, "write">, line = ""): void => {
@@ -71,6 +115,227 @@ const splitRepo = (repo: string): { owner: string; name: string } => {
   return { owner, name };
 };
 
+const readRequestBody = async (request: IncomingMessage): Promise<Buffer> => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  return Buffer.concat(chunks);
+};
+
+const sendJson = (
+  response: ServerResponse,
+  statusCode: number,
+  body: Record<string, unknown>
+): void => {
+  response.writeHead(statusCode, {
+    "content-type": "application/json"
+  });
+  response.end(JSON.stringify(body));
+};
+
+const defaultOpenBrowser = (url: string): void => {
+  const command =
+    platform() === "darwin" ? "open" : platform() === "win32" ? "cmd" : "xdg-open";
+  const args = platform() === "win32" ? ["/c", "start", "", url] : [url];
+  execFile(command, args, () => {
+    // Users can manually open the URL printed by the CLI if this fails.
+  });
+};
+
+const normalizeBaseUrl = (url: string): string => {
+  return url.replace(/\/+$/, "");
+};
+
+const safeEqual = (left: string, right: string): boolean => {
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+};
+
+const authHeaders = async (
+  home: string | undefined,
+  scope: "rest" | "git" = "rest",
+  expiresInMs = REST_AUTH_EXPIRES_IN_MS
+): Promise<Record<string, string>> => {
+  const credentials = await readCredentials(home);
+  if (!credentials) {
+    return {};
+  }
+
+  return {
+    [delegateAuthHeaders.token]: await createDelegateAuthToken({
+      credentials,
+      scope,
+      expiresInMs
+    })
+  };
+};
+
+const fetchAuthServerConfig = async (
+  context: CliContext,
+  serverUrl: string
+): Promise<AuthServerConfig | null> => {
+  try {
+    return await requestJson<AuthServerConfig>(new URL("/v1/auth/config", serverUrl).toString(), {
+      fetch: context.fetch,
+      method: "GET"
+    });
+  } catch {
+    return null;
+  }
+};
+
+const runGit = async (args: string[], cwd?: string): Promise<string> => {
+  return await new Promise((resolvePromise, reject) => {
+    const child = spawn("git", args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolvePromise(Buffer.concat(stdout).toString("utf8").trim());
+        return;
+      }
+
+      reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `git ${args.join(" ")} failed`));
+    });
+  });
+};
+
+const configureRemote = async (
+  cwd: string | undefined,
+  remoteName: string,
+  remoteUrl: string,
+  credentials: OctopusCredentials
+): Promise<void> => {
+  try {
+    await runGit(["remote", "get-url", remoteName], cwd);
+    await runGit(["remote", "set-url", remoteName, remoteUrl], cwd);
+  } catch {
+    await runGit(["remote", "add", remoteName, remoteUrl], cwd);
+  }
+
+  const configKey = `http.${remoteUrl}.extraHeader`;
+  try {
+    await runGit(["config", "--local", "--unset-all", configKey], cwd);
+  } catch {
+    // The key is absent on first connect.
+  }
+
+  await runGit([
+    "config",
+    "--local",
+    "--add",
+    configKey,
+    `${delegateAuthHeaders.token}: ${await createDelegateAuthToken({
+      credentials,
+      scope: "git",
+      expiresInMs: GIT_AUTH_EXPIRES_IN_MS
+    })}`
+  ], cwd);
+};
+
+const startLoginCallbackServer = async (input: {
+  port: number;
+  timeoutMs: number;
+  state: string;
+  credentialsBase: Omit<OctopusCredentials, "walletAddress" | "accountId" | "loggedInAt">;
+}): Promise<{ callbackUrl: string; credentials: Promise<OctopusCredentials>; close: () => Promise<void> }> => {
+  let settleCredentials!: (credentials: OctopusCredentials) => void;
+  let rejectCredentials!: (error: Error) => void;
+  const credentials = new Promise<OctopusCredentials>((resolve, reject) => {
+    settleCredentials = resolve;
+    rejectCredentials = reject;
+  });
+
+  const server = createServer(async (request, response) => {
+    try {
+      response.setHeader("access-control-allow-origin", "*");
+      response.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
+      response.setHeader("access-control-allow-headers", "content-type");
+
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (url.pathname !== "/callback") {
+        sendJson(response, 404, { error: "Not found" });
+        return;
+      }
+
+      if (request.method === "OPTIONS") {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+
+      const body =
+        request.method === "POST"
+          ? JSON.parse((await readRequestBody(request)).toString("utf8") || "{}") as Record<string, unknown>
+          : Object.fromEntries(url.searchParams.entries());
+      const callbackState = typeof body.state === "string" ? body.state : "";
+      if (!safeEqual(callbackState, input.state)) {
+        throw new Error("Invalid login callback state");
+      }
+
+      const callback = authCallbackRequestSchema.parse({
+        ...body,
+        walletAddress: body.walletAddress ?? body.address,
+        accountId: body.accountId ?? body.account_id,
+        packageId: body.packageId ?? body.package_id,
+        accountRegistryId: body.accountRegistryId ?? body.account_registry_id,
+        repoRegistryId: body.repoRegistryId ?? body.repo_registry_id
+      });
+      const nextCredentials: OctopusCredentials = {
+        ...input.credentialsBase,
+        walletAddress: callback.walletAddress,
+        accountId: callback.accountId,
+        serverUrl: callback.serverUrl ?? input.credentialsBase.serverUrl,
+        webUrl: callback.webUrl ?? input.credentialsBase.webUrl,
+        packageId: callback.packageId ?? input.credentialsBase.packageId,
+        accountRegistryId: callback.accountRegistryId ?? input.credentialsBase.accountRegistryId,
+        repoRegistryId: callback.repoRegistryId ?? input.credentialsBase.repoRegistryId,
+        loggedInAt: new Date().toISOString()
+      };
+      settleCredentials(nextCredentials);
+      sendJson(response, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      rejectCredentials(new Error(message));
+      sendJson(response, 400, { error: message });
+    }
+  });
+
+  await new Promise<void>((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(input.port, "127.0.0.1", () => resolvePromise());
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Could not start login callback server");
+  }
+
+  const timeout = setTimeout(() => {
+    rejectCredentials(new Error("Timed out waiting for wallet approval"));
+  }, input.timeoutMs);
+
+  credentials.finally(() => clearTimeout(timeout)).catch(() => undefined);
+
+  return {
+    callbackUrl: `http://127.0.0.1:${address.port}/callback`,
+    credentials,
+    close: async () => {
+      await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    }
+  };
+};
+
 export const createProgram = (context: CliContext): Command => {
   const program = new Command();
   const baseUrl = defaultBaseUrl(context.env);
@@ -92,10 +357,99 @@ export const createProgram = (context: CliContext): Command => {
   authCommand
     .command("login")
     .description("Start wallet-backed CLI login")
-    .action(() => {
-      writeLine(context.stdout, "auth login is not wired to wallet approval yet");
-      writeLine(context.stdout, `Credentials will be stored at ${credentialsPath(context.home)}`);
-      writeLine(context.stdout, "Spec: specs/protocols/auth.md");
+    .option("--server <url>", "Octopus server URL", baseUrl)
+    .option("--web-url <url>", "Octopus web login URL", context.env.OCTOPUS_WEB_URL ?? "http://127.0.0.1:45173")
+    .option("--callback-port <port>", "localhost callback port", "0")
+    .option("--timeout-ms <ms>", "wallet approval timeout", "300000")
+    .option("--delegate-private-key <key>", "reuse an existing delegate private key")
+    .option("--package-id <id>", "Sui package ID", context.env.SUI_PACKAGE_ID)
+    .option("--account-registry-id <id>", "Octopus account registry object ID", context.env.OCTOPUS_ACCOUNT_REGISTRY_ID)
+    .option("--repo-registry-id <id>", "Octopus repo registry object ID", context.env.OCTOPUS_REPO_REGISTRY_ID)
+    .option("--no-browser", "print the login URL without opening a browser")
+    .action(async (options: AuthLoginOptions) => {
+      const serverUrl = normalizeBaseUrl(options.server);
+      const webUrl = normalizeBaseUrl(options.webUrl);
+      const serverConfig = await fetchAuthServerConfig(context, serverUrl);
+      const packageId = options.packageId ?? serverConfig?.packageId;
+      const accountRegistryId = options.accountRegistryId ?? serverConfig?.accountRegistryId;
+      const repoRegistryId = options.repoRegistryId ?? serverConfig?.repoRegistryId;
+
+      if (serverConfig?.suiMode === "testnet" && (!packageId || !accountRegistryId || !repoRegistryId)) {
+        throw new Error(
+          "Server is in testnet mode but Sui package/registry IDs are missing. Set SUI_PACKAGE_ID, OCTOPUS_ACCOUNT_REGISTRY_ID, and OCTOPUS_REPO_REGISTRY_ID."
+        );
+      }
+
+      const identity = options.delegatePrivateKey
+        ? identityFromPrivateKey(options.delegatePrivateKey)
+        : generateDelegateIdentity();
+      const loginState = randomBytes(16).toString("hex");
+      const callback = await startLoginCallbackServer({
+        port: Number.parseInt(options.callbackPort ?? "0", 10),
+        timeoutMs: Number.parseInt(options.timeoutMs ?? "300000", 10),
+        state: loginState,
+        credentialsBase: {
+          ...identity,
+          serverUrl,
+          webUrl,
+          packageId,
+          accountRegistryId,
+          repoRegistryId
+        }
+      });
+
+      const loginUrl = new URL("/login", webUrl);
+      loginUrl.searchParams.set("callback", callback.callbackUrl);
+      loginUrl.searchParams.set("server", serverUrl);
+      loginUrl.searchParams.set("delegatePublicKey", identity.delegatePublicKey);
+      loginUrl.searchParams.set("delegateAddress", identity.delegateAddress);
+      loginUrl.searchParams.set("state", loginState);
+      if (packageId) loginUrl.searchParams.set("packageId", packageId);
+      if (accountRegistryId) loginUrl.searchParams.set("accountRegistryId", accountRegistryId);
+      if (repoRegistryId) loginUrl.searchParams.set("repoRegistryId", repoRegistryId);
+      if (serverConfig?.serverDelegatePublicKey && serverConfig.serverDelegateAddress) {
+        loginUrl.searchParams.set("serverDelegatePublicKey", serverConfig.serverDelegatePublicKey);
+        loginUrl.searchParams.set("serverDelegateAddress", serverConfig.serverDelegateAddress);
+      }
+
+      writeLine(context.stdout, `Open: ${loginUrl.toString()}`);
+      writeLine(context.stdout, `Waiting for wallet approval at ${callback.callbackUrl}`);
+      if (options.browser !== false) {
+        (context.openBrowser ?? defaultOpenBrowser)(loginUrl.toString());
+      }
+
+      try {
+        const credentials = await callback.credentials;
+        const path = await writeCredentials(credentials, context.home);
+        writeLine(context.stdout, `Logged in as ${credentials.walletAddress}`);
+        writeLine(context.stdout, `Delegate: ${credentials.delegateAddress}`);
+        writeLine(context.stdout, `Credentials: ${path}`);
+      } finally {
+        await callback.close();
+      }
+    });
+
+  authCommand
+    .command("whoami")
+    .description("Show the saved wallet/delegate identity")
+    .action(async () => {
+      const credentials = await readCredentials(context.home);
+      if (!credentials) {
+        throw new Error(`Not logged in. Run octopus auth login first.`);
+      }
+
+      writeLine(context.stdout, `Wallet:   ${credentials.walletAddress}`);
+      writeLine(context.stdout, `Account:  ${credentials.accountId}`);
+      writeLine(context.stdout, `Delegate: ${credentials.delegateAddress}`);
+      writeLine(context.stdout, `Server:   ${credentials.serverUrl}`);
+    });
+
+  authCommand
+    .command("logout")
+    .description("Remove saved local credentials")
+    .action(async () => {
+      const removed = await deleteCredentials(context.home);
+      writeLine(context.stdout, removed ? "Logged out" : "No credentials found");
     });
 
   const repoCommand = program
@@ -124,12 +478,33 @@ export const createProgram = (context: CliContext): Command => {
       }>(new URL("/v1/repos", options.server).toString(), {
         fetch: context.fetch,
         method: "POST",
+        headers: await authHeaders(context.home),
         body: JSON.stringify(payload)
       });
 
       const remote = new URL(repo.gitRemotePath, options.server).toString();
       writeLine(context.stdout, `Created ${repo.owner}/${repo.name} (${repo.visibility})`);
       writeLine(context.stdout, `Remote: ${remote}`);
+    });
+
+  repoCommand
+    .command("connect")
+    .argument("<repo>", "repository in owner/name form")
+    .option("--remote <name>", "Git remote name", "origin")
+    .option("--server <url>", "Octopus server URL", baseUrl)
+    .description("Configure a Git remote and repo-local delegate key headers")
+    .action(async (repo: string, options: RepoConnectOptions) => {
+      const credentials = await readCredentials(context.home);
+      if (!credentials) {
+        throw new Error(`Not logged in. Run octopus auth login first.`);
+      }
+
+      const { owner, name } = splitRepo(repo);
+      const remoteUrl = new URL(`/${owner}/${name}.git`, normalizeBaseUrl(options.server)).toString();
+      await configureRemote(context.cwd, options.remote, remoteUrl, credentials);
+      writeLine(context.stdout, `Connected ${repo}`);
+      writeLine(context.stdout, `  remote: ${options.remote}`);
+      writeLine(context.stdout, `  url:    ${remoteUrl}`);
     });
 
   repoCommand
@@ -150,7 +525,8 @@ export const createProgram = (context: CliContext): Command => {
         }>;
       }>(new URL(`/v1/repos/${owner}/${name}/manifests`, options.server).toString(), {
         fetch: context.fetch,
-        method: "GET"
+        method: "GET",
+        headers: await authHeaders(context.home)
       });
 
       if (response.manifests.length === 0) {
@@ -182,7 +558,8 @@ export const createProgram = (context: CliContext): Command => {
       manifestSource: string;
     }>(new URL(`/v1/repos/${owner}/${name}/restore`, options.server).toString(), {
       fetch: context.fetch,
-      method: "POST"
+      method: "POST",
+      headers: await authHeaders(context.home)
     });
 
     writeLine(context.stdout, `Restored ${response.owner}/${response.repo}`);
@@ -216,11 +593,17 @@ export const runCli = async (
   argv: string[],
   context: Partial<CliContext> = {}
 ): Promise<void> => {
+  if (!context.env) {
+    loadDotenv(context.cwd ?? process.cwd());
+  }
+
   const stderr = context.stderr ?? process.stderr;
   const program = createProgram({
     env: context.env ?? process.env,
     fetch: context.fetch ?? fetch,
+    cwd: context.cwd ?? process.cwd(),
     home: context.home,
+    openBrowser: context.openBrowser,
     stdout: context.stdout ?? process.stdout,
     stderr
   });

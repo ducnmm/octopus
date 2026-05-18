@@ -8,33 +8,24 @@ Command:
 octopus auth login
 ```
 
-The CLI generates a local delegate key and asks the user to approve it through a Sui wallet.
+The CLI generates a local delegate key and asks the user to approve it through a Sui wallet. In testnet mode, the wallet creates an `OctopusAccount` if needed and registers both the CLI delegate key and the configured server relay delegate key on-chain.
 
-## Delegate API Signature
+## Delegate Git/API Headers
 
 Headers:
 
 ```text
-x-delegate-public-key
-x-delegate-signature
-x-delegate-timestamp
-```
-
-Message:
-
-```text
-timestamp.method.path.sha256(body)
+x-octopus-auth-token
 ```
 
 Server verification:
 
-1. Verify signature with `x-delegate-public-key`.
-2. Check timestamp freshness.
-3. Check delegate key is registered on-chain.
+1. Decode the signed delegate auth token.
+2. Verify the Ed25519 personal-message signature against the delegate public key.
+3. Check the delegate key is registered locally or on-chain for the token account ID.
 4. Map delegate key to wallet/account.
 5. Authorize requested repo action.
 
 ## Git Compatibility
 
-Normal Git HTTPS cannot sign Sui wallet messages on every push. Octopus uses Git tokens or SSH keys for Git protocol compatibility, then maps those credentials back to Sui-owned accounts.
-
+Normal Git HTTPS cannot sign Sui wallet messages on every push. Octopus writes a repo-local Git `http.extraHeader` containing a signed delegate token, so the delegate private key stays on the client machine.

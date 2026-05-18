@@ -1,6 +1,15 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { runCli } from "./program.js";
 import type { OctopusFetch } from "./client.js";
+import { readCredentials, writeCredentials } from "./credentials.js";
+import { generateDelegateIdentity } from "./delegate.js";
+
+const execFileAsync = promisify(execFile);
 
 type CapturedOutput = {
   output: () => string;
@@ -31,12 +40,27 @@ const createContext = (fetchImpl: OctopusFetch = vi.fn() as unknown as OctopusFe
       env: {},
       fetch: fetchImpl,
       home: "/tmp/octopus-home",
+      openBrowser: vi.fn(),
       stdout: stdout.stream,
       stderr: stderr.stream
     },
     stderr,
     stdout
   };
+};
+
+const waitForMatch = async (read: () => string, pattern: RegExp): Promise<RegExpMatchArray> => {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 5000) {
+    const match = read().match(pattern);
+    if (match) {
+      return match;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  throw new Error(`Timed out waiting for ${pattern}`);
 };
 
 const okJson = (body: unknown, status = 200): Response => {
@@ -72,7 +96,7 @@ test("repo create sends a public visibility payload by default", async () => {
 
   expect(fetchImpl).toHaveBeenCalledOnce();
   const [url, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
-  expect(String(url)).toBe("http://127.0.0.1:18787/v1/repos");
+  expect(String(url)).toBe("http://127.0.0.1:48787/v1/repos");
   expect(JSON.parse(String(init?.body))).toEqual({
     owner: "ducnmm",
     name: "demo",
@@ -160,17 +184,91 @@ test("repo restore calls the restore endpoint and prints the result", async () =
   await runCli(["repo", "restore", "ducnmm/demo"], context);
 
   const [url, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
-  expect(String(url)).toBe("http://127.0.0.1:18787/v1/repos/ducnmm/demo/restore");
+  expect(String(url)).toBe("http://127.0.0.1:48787/v1/repos/ducnmm/demo/restore");
   expect(init?.method).toBe("POST");
   expect(stdout.output()).toContain("Restored ducnmm/demo");
   expect(stdout.output()).toContain("source:   sui-local");
 });
 
-test("auth login reports the credential location while wallet approval is pending", async () => {
+test("auth login accepts the wallet callback and writes credentials", async () => {
+  const home = await mkdtemp(join(tmpdir(), "octopus-cli-home-"));
   const { context, stdout } = createContext();
+  context.home = home;
 
-  await runCli(["auth", "login"], context);
+  const run = runCli([
+    "auth",
+    "login",
+    "--no-browser",
+    "--server",
+    "http://server.test",
+    "--web-url",
+    "http://web.test",
+    "--timeout-ms",
+    "5000"
+  ], context);
 
-  expect(stdout.output()).toContain("auth login is not wired to wallet approval yet");
-  expect(stdout.output()).toContain("/tmp/octopus-home/.octopus/credentials.json");
+  const [, callbackUrl] = await waitForMatch(
+    stdout.output,
+    /Waiting for wallet approval at (http:\/\/127\.0\.0\.1:\d+\/callback)/
+  );
+  const [, openUrl] = await waitForMatch(stdout.output, /Open: (http:\/\/web\.test\/login\?\S+)/);
+  const state = new URL(openUrl!).searchParams.get("state");
+  expect(state).toMatch(/^[0-9a-f]{32}$/);
+  await fetch(callbackUrl!, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      walletAddress: "0xabc",
+      accountId: "local:abc",
+      state,
+      packageId: "0xpackage",
+      accountRegistryId: "0xaccount-registry",
+      repoRegistryId: "0xrepo-registry"
+    })
+  });
+  await run;
+
+  const credentials = await readCredentials(home);
+  expect(credentials).toMatchObject({
+    walletAddress: "0xabc",
+    accountId: "local:abc",
+    serverUrl: "http://server.test",
+    webUrl: "http://web.test",
+    packageId: "0xpackage"
+  });
+  expect(credentials?.delegatePrivateKey).toBeTruthy();
+  expect(stdout.output()).toContain(`Credentials: ${home}/.octopus/credentials.json`);
+  await rm(home, { recursive: true, force: true });
+});
+
+test("repo connect writes remote URL and signed delegate token header", async () => {
+  const home = await mkdtemp(join(tmpdir(), "octopus-cli-home-"));
+  const repoDir = await mkdtemp(join(tmpdir(), "octopus-cli-repo-"));
+  const identity = generateDelegateIdentity();
+  await execFileAsync("git", ["init"], { cwd: repoDir });
+  await writeCredentials({
+    ...identity,
+    walletAddress: "0xabc",
+    accountId: "local:abc",
+    serverUrl: "http://127.0.0.1:48787",
+    webUrl: "http://127.0.0.1:45173"
+  }, home);
+  const { context, stdout } = createContext();
+  context.home = home;
+  context.cwd = repoDir;
+
+  await runCli(["repo", "connect", "ducnmm/demo", "--server", "http://octopus.test"], context);
+
+  const remote = await execFileAsync("git", ["remote", "get-url", "origin"], { cwd: repoDir });
+  expect(remote.stdout.trim()).toBe("http://octopus.test/ducnmm/demo.git");
+  const headers = await execFileAsync(
+    "git",
+    ["config", "--local", "--get-all", "http.http://octopus.test/ducnmm/demo.git.extraHeader"],
+    { cwd: repoDir }
+  );
+  expect(headers.stdout).toContain("x-octopus-auth-token:");
+  expect(headers.stdout).not.toContain(identity.delegatePrivateKey);
+  expect(stdout.output()).toContain("Connected ducnmm/demo");
+  await rm(home, { recursive: true, force: true });
+  await rm(repoDir, { recursive: true, force: true });
 });

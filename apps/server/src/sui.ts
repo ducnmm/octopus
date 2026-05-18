@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { PackManifest } from "./artifacts.js";
+import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
+import { Transaction } from "@mysten/sui/transactions";
+import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { keypairFromPrivateKey, type AuthContext } from "./auth.js";
+import { readRepoManifests, type PackManifest } from "./artifacts.js";
 import type { ServerConfig } from "./config.js";
 
 export type SuiRefState = {
@@ -13,26 +17,44 @@ export type SuiRefState = {
 };
 
 export type SuiRepoState = {
-  registryMode: "local";
+  registryMode: "local" | "testnet";
   repoObjectId: string;
   repoId: string;
   owner: string;
+  ownerWallet: string;
+  accountId?: string;
   repo: string;
   visibility: "public" | "private";
   defaultBranch: string;
   refs: Record<string, SuiRefState>;
   manifests: PackManifest[];
+  readers: string[];
+  writers: string[];
   createdAtMs: number;
   updatedAtMs: number;
 };
 
 export type SuiAnchorResult = {
-  registryMode: "local";
+  registryMode: "local" | "testnet";
   repoObjectId: string;
   manifestId: string;
   refName: string;
   commitDigest: string;
   seq: number;
+};
+
+export type SuiManifestSource = "sui-local" | "sui-testnet";
+
+export type SuiManifestReadResult = {
+  manifests: PackManifest[];
+  source: SuiManifestSource;
+};
+
+export type SuiRepoStateAuthorizationResult = {
+  state: SuiRepoState | null;
+  source: SuiManifestSource;
+  authoritative: boolean;
+  error?: Error;
 };
 
 const repoObjectId = (owner: string, repo: string): string => {
@@ -44,6 +66,80 @@ const repoStatePath = (config: ServerConfig, owner: string, repo: string): strin
   return join(config.dataDir, "sui", "repos", owner, `${repo}.json`);
 };
 
+const fieldsAsRecord = (value: unknown): Record<string, unknown> => {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+};
+
+const moveFields = (value: unknown): Record<string, unknown> => {
+  const fields = fieldsAsRecord(value).fields;
+  return fieldsAsRecord(fields);
+};
+
+const tableId = (value: unknown): string => {
+  const fields = moveFields(value);
+  const id = fieldsAsRecord(fields.id).id;
+  return typeof id === "string" ? id : "";
+};
+
+const asString = (value: unknown): string => {
+  return typeof value === "string" ? value : "";
+};
+
+const asNumber = (value: unknown, fallback = 0): number => {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isNaN(parsed) ? fallback : parsed;
+  }
+
+  return fallback;
+};
+
+const visibilityFromCode = (value: unknown): "public" | "private" => {
+  return asNumber(value) === 1 ? "private" : "public";
+};
+
+const allDynamicFields = async (
+  client: SuiJsonRpcClient,
+  parentId: string
+): Promise<Array<{ name: { type: string; value: unknown }; objectId: string }>> => {
+  const fields: Array<{ name: { type: string; value: unknown }; objectId: string }> = [];
+  let cursor: string | null | undefined;
+
+  do {
+    const page = await client.getDynamicFields({
+      parentId,
+      cursor,
+      limit: 50
+    });
+    fields.push(...page.data.map((field) => ({
+      name: field.name,
+      objectId: field.objectId
+    })));
+    cursor = page.hasNextPage ? page.nextCursor : null;
+  } while (cursor);
+
+  return fields;
+};
+
+const dynamicFieldValue = async (
+  client: SuiJsonRpcClient,
+  parentId: string,
+  name: { type: string; value: unknown }
+): Promise<Record<string, unknown> | null> => {
+  try {
+    const object = await client.getDynamicFieldObject({ parentId, name });
+    const fields = moveFields(object.data?.content);
+    const value = fields.value;
+    const nested = moveFields(value);
+    return Object.keys(nested).length > 0 ? nested : fieldsAsRecord(value);
+  } catch {
+    return null;
+  }
+};
+
 const readRepoStateFile = async (
   config: ServerConfig,
   owner: string,
@@ -51,7 +147,11 @@ const readRepoStateFile = async (
 ): Promise<SuiRepoState | null> => {
   try {
     const raw = await readFile(repoStatePath(config, owner, repo), "utf8");
-    return JSON.parse(raw) as SuiRepoState;
+    const state = JSON.parse(raw) as SuiRepoState;
+    state.ownerWallet ??= state.owner;
+    state.readers ??= [];
+    state.writers ??= [];
+    return state;
   } catch {
     return null;
   }
@@ -69,30 +169,119 @@ export const ensureSuiRepo = async (
     owner: string;
     repo: string;
     visibility: "public" | "private";
-  }
+    ownerWallet?: string;
+    accountId?: string;
+  },
+  auth?: AuthContext | null
 ): Promise<SuiRepoState> => {
   const existing = await readRepoStateFile(config, input.owner, input.repo);
   if (existing) {
     return existing;
   }
 
+  const nextRepoObjectId =
+    config.suiMode === "testnet"
+      ? await createTestnetRepo(config, input, auth)
+      : repoObjectId(input.owner, input.repo);
+
   const now = Date.now();
   const state: SuiRepoState = {
-    registryMode: "local",
-    repoObjectId: repoObjectId(input.owner, input.repo),
+    registryMode: config.suiMode,
+    repoObjectId: nextRepoObjectId,
     repoId: `${input.owner}/${input.repo}`,
     owner: input.owner,
+    ownerWallet: input.ownerWallet ?? auth?.walletAddress ?? input.owner,
+    accountId: input.accountId ?? auth?.accountId,
     repo: input.repo,
     visibility: input.visibility,
     defaultBranch: "refs/heads/main",
     refs: {},
     manifests: [],
+    readers: [],
+    writers: [],
     createdAtMs: now,
     updatedAtMs: now
   };
 
   await writeRepoStateFile(config, state);
   return state;
+};
+
+const visibilityCode = (visibility: "public" | "private"): number => {
+  return visibility === "private" ? 1 : 0;
+};
+
+const testnetTransactionSigner = (
+  config: ServerConfig,
+  auth?: AuthContext | null
+): Ed25519Keypair => {
+  const privateKey = config.serverSuiPrivateKeys[0] ?? auth?.delegatePrivateKey;
+  if (!privateKey) {
+    throw new Error(
+      "SERVER_SUI_PRIVATE_KEYS is required for testnet Sui transactions. Register the server key as an account delegate during login."
+    );
+  }
+
+  return keypairFromPrivateKey(privateKey);
+};
+
+const createTestnetRepo = async (
+  config: ServerConfig,
+  input: {
+    owner: string;
+    repo: string;
+    visibility: "public" | "private";
+    accountId?: string;
+  },
+  auth?: AuthContext | null
+): Promise<string> => {
+  if (!auth) {
+    throw new Error("Sui testnet repo creation requires delegate auth");
+  }
+
+  if (!config.suiPackageId || !config.repoRegistryId) {
+    throw new Error("SUI_PACKAGE_ID and OCTOPUS_REPO_REGISTRY_ID are required for testnet repo creation");
+  }
+
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${config.suiPackageId}::registry::create_repo`,
+    arguments: [
+      tx.object(config.repoRegistryId),
+      tx.object(input.accountId ?? auth.accountId),
+      tx.pure.string(`${input.owner}/${input.repo}`),
+      tx.pure.string(input.repo),
+      tx.pure.u8(visibilityCode(input.visibility)),
+      tx.pure.string("refs/heads/main")
+    ]
+  });
+
+  const client = new SuiJsonRpcClient({ url: config.suiRpcUrl, network: config.suiNetwork as "testnet" });
+  const result = await client.signAndExecuteTransaction({
+    signer: testnetTransactionSigner(config, auth),
+    transaction: tx,
+    options: {
+      showEffects: true,
+      showObjectChanges: true
+    }
+  });
+
+  const error = result.effects?.status.status === "failure" ? result.effects.status.error : undefined;
+  if (error) {
+    throw new Error(`Sui create_repo failed: ${error}`);
+  }
+
+  const repoObject = result.objectChanges?.find(
+    (change: { type: string; objectType?: string; objectId?: string }) =>
+      change.type === "created" &&
+      "objectType" in change &&
+      String(change.objectType).endsWith("::registry::Repo")
+  );
+  if (!repoObject || !("objectId" in repoObject)) {
+    throw new Error("Sui create_repo did not return a Repo object ID");
+  }
+
+  return String(repoObject.objectId);
 };
 
 const assertExpectedOldCommit = (state: SuiRepoState, manifest: PackManifest): void => {
@@ -107,7 +296,8 @@ const assertExpectedOldCommit = (state: SuiRepoState, manifest: PackManifest): v
 
 export const anchorPushManifests = async (
   config: ServerConfig,
-  manifests: PackManifest[]
+  manifests: PackManifest[],
+  auth?: AuthContext | null
 ): Promise<SuiAnchorResult[]> => {
   const results: SuiAnchorResult[] = [];
 
@@ -121,6 +311,10 @@ export const anchorPushManifests = async (
       }));
 
     assertExpectedOldCommit(state, manifest);
+
+    if (config.suiMode === "testnet") {
+      await pushRefOnTestnet(config, state, manifest, auth);
+    }
 
     const updatedAtMs = Date.now();
     state.refs[manifest.refName] = {
@@ -137,7 +331,7 @@ export const anchorPushManifests = async (
 
     await writeRepoStateFile(config, state);
     results.push({
-      registryMode: "local",
+      registryMode: state.registryMode,
       repoObjectId: state.repoObjectId,
       manifestId: manifest.manifestId,
       refName: manifest.refName,
@@ -149,12 +343,395 @@ export const anchorPushManifests = async (
   return results;
 };
 
+const pushRefOnTestnet = async (
+  config: ServerConfig,
+  state: SuiRepoState,
+  manifest: PackManifest,
+  auth?: AuthContext | null
+): Promise<void> => {
+  if (!auth) {
+    throw new Error("Sui testnet push_ref requires delegate auth");
+  }
+
+  if (!config.suiPackageId) {
+    throw new Error("SUI_PACKAGE_ID is required for testnet push_ref");
+  }
+
+  const onchainMetadata = JSON.stringify({
+    v: 1,
+    localManifestId: manifest.manifestId,
+    visibility: manifest.visibility,
+    encrypted: manifest.encrypted,
+    storedArtifactDigest: manifest.storedArtifactDigest ?? manifest.artifactDigest,
+    storageMode: manifest.storageMode,
+    sealEnvelope: manifest.sealEnvelope ?? null
+  });
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${config.suiPackageId}::registry::push_ref`,
+    arguments: [
+      tx.object(state.repoObjectId),
+      tx.object(auth.accountId),
+      tx.pure.string(manifest.refName),
+      tx.pure.string(manifest.oldCommit ?? ""),
+      tx.pure.string(manifest.newCommit),
+      tx.pure.string(manifest.walrusBlobId),
+      tx.pure.string(manifest.walrusBlobObjectId ?? ""),
+      tx.pure.string(manifest.artifactDigest),
+      tx.pure.u64(BigInt(manifest.artifactSizeBytes)),
+      tx.pure.string(onchainMetadata),
+      tx.pure.string(""),
+      tx.pure.bool(manifest.isSnapshot)
+    ]
+  });
+
+  const client = new SuiJsonRpcClient({ url: config.suiRpcUrl, network: config.suiNetwork as "testnet" });
+  const result = await client.signAndExecuteTransaction({
+    signer: testnetTransactionSigner(config, auth),
+    transaction: tx,
+    options: { showEffects: true }
+  });
+  const error = result.effects?.status.status === "failure" ? result.effects.status.error : undefined;
+  if (error) {
+    throw new Error(`Sui push_ref failed: ${error}`);
+  }
+};
+
+export const canReadRepo = (state: SuiRepoState, auth?: AuthContext | null): boolean => {
+  if (state.visibility === "public") {
+    return true;
+  }
+
+  if (!auth) {
+    return false;
+  }
+
+  return (
+    auth.walletAddress === state.ownerWallet ||
+    auth.walletAddress === state.owner ||
+    (state.writers ?? []).includes(auth.walletAddress) ||
+    (state.readers ?? []).includes(auth.walletAddress)
+  );
+};
+
+export const canWriteRepo = (state: SuiRepoState, auth?: AuthContext | null): boolean => {
+  if (!auth) {
+    return false;
+  }
+
+  return (
+    auth.walletAddress === state.ownerWallet ||
+    auth.walletAddress === state.owner ||
+    (state.writers ?? []).includes(auth.walletAddress)
+  );
+};
+
+const testnetClient = (config: ServerConfig): SuiJsonRpcClient => {
+  return new SuiJsonRpcClient({ url: config.suiRpcUrl, network: config.suiNetwork as "testnet" });
+};
+
+const resolveTestnetRepoObjectId = async (
+  config: ServerConfig,
+  client: SuiJsonRpcClient,
+  owner: string,
+  repo: string
+): Promise<string | null> => {
+  if (!config.repoRegistryId) {
+    return null;
+  }
+
+  const registry = await client.getObject({
+    id: config.repoRegistryId,
+    options: { showContent: true }
+  });
+  const reposTableId = tableId(moveFields(registry.data?.content).repos);
+  if (!reposTableId) {
+    return null;
+  }
+
+  try {
+    const entry = await client.getDynamicFieldObject({
+      parentId: reposTableId,
+      name: { type: "0x1::string::String", value: `${owner}/${repo}` }
+    });
+    const value = moveFields(entry.data?.content).value;
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+const readTestnetRefs = async (
+  client: SuiJsonRpcClient,
+  refsTableId: string
+): Promise<Record<string, SuiRefState>> => {
+  if (!refsTableId) {
+    return {};
+  }
+
+  const refs: Record<string, SuiRefState> = {};
+  for (const field of await allDynamicFields(client, refsTableId)) {
+    const value = await dynamicFieldValue(client, refsTableId, field.name);
+    if (!value) {
+      continue;
+    }
+
+    const refName = asString(field.name.value);
+    if (!refName) {
+      continue;
+    }
+
+    refs[refName] = {
+      refName,
+      commitDigest: asString(value.commit_digest),
+      manifestId: asString(value.manifest_id),
+      seq: asNumber(value.seq),
+      updatedAtMs: asNumber(value.updated_at_ms)
+    };
+  }
+
+  return refs;
+};
+
+const readAddressTableKeys = async (
+  client: SuiJsonRpcClient,
+  tableObjectId: string
+): Promise<string[]> => {
+  if (!tableObjectId) {
+    return [];
+  }
+
+  return (await allDynamicFields(client, tableObjectId))
+    .map((field) => asString(field.name.value))
+    .filter(Boolean);
+};
+
+const parseOnchainMetadata = (value: unknown): Record<string, unknown> => {
+  if (typeof value !== "string" || !value.trim().startsWith("{")) {
+    return {};
+  }
+
+  try {
+    return fieldsAsRecord(JSON.parse(value));
+  } catch {
+    return {};
+  }
+};
+
+const localManifestKey = (manifest: PackManifest): string => {
+  return [
+    manifest.refName,
+    manifest.newCommit,
+    manifest.artifactDigest,
+    String(manifest.seq)
+  ].join("\0");
+};
+
+const localManifestShortKey = (manifest: Pick<PackManifest, "refName" | "newCommit" | "seq">): string => {
+  return [
+    manifest.refName,
+    manifest.newCommit,
+    String(manifest.seq)
+  ].join("\0");
+};
+
+const localManifestLookup = async (
+  config: ServerConfig,
+  owner: string,
+  repo: string
+): Promise<{
+  byFullKey: Map<string, PackManifest>;
+  byShortKey: Map<string, PackManifest>;
+}> => {
+  const localManifests = await readRepoManifests(config.dataDir, owner, repo);
+  return {
+    byFullKey: new Map(localManifests.map((manifest) => [localManifestKey(manifest), manifest])),
+    byShortKey: new Map(localManifests.map((manifest) => [localManifestShortKey(manifest), manifest]))
+  };
+};
+
+const readTestnetRepoManifests = async (
+  config: ServerConfig,
+  client: SuiJsonRpcClient,
+  input: {
+    owner: string;
+    repo: string;
+    repoId: string;
+    repoObjectId: string;
+    visibility: "public" | "private";
+    manifestsTableId: string;
+  }
+): Promise<PackManifest[]> => {
+  if (!input.manifestsTableId) {
+    return [];
+  }
+
+  const localByKey = await localManifestLookup(config, input.owner, input.repo);
+  const manifests: PackManifest[] = [];
+
+  for (const field of await allDynamicFields(client, input.manifestsTableId)) {
+    const value = await dynamicFieldValue(client, input.manifestsTableId, field.name);
+    if (!value) {
+      continue;
+    }
+
+    const metadata = parseOnchainMetadata(value.base_manifest_id);
+    const artifactDigest = asString(value.artifact_digest);
+    const storedArtifactDigest = asString(metadata.storedArtifactDigest) || undefined;
+    const artifactCacheDigest = storedArtifactDigest ?? artifactDigest;
+    const seq = asNumber(value.seq);
+    const refName = asString(value.ref_name);
+    const newCommit = asString(value.new_commit);
+    const manifest: PackManifest = {
+      manifestId: asString(value.manifest_id),
+      repoId: input.repoId,
+      owner: input.owner,
+      repo: input.repo,
+      refName,
+      oldCommit: asString(value.old_commit) || null,
+      newCommit,
+      walrusBlobId: asString(value.walrus_blob_id),
+      walrusBlobObjectId: asString(value.walrus_blob_object_id) || undefined,
+      artifactDigest,
+      storedArtifactDigest,
+      artifactSizeBytes: asNumber(value.artifact_size_bytes),
+      artifactPath: join(config.dataDir, "walrus", "blobs", `${artifactCacheDigest}.bundle`),
+      storageMode: asString(metadata.storageMode) === "local" ? "local" : "walrus-relay",
+      visibility: asString(metadata.visibility) === "private" ? "private" : input.visibility,
+      encrypted:
+        typeof metadata.encrypted === "boolean"
+          ? metadata.encrypted
+          : input.visibility === "private",
+      sealEnvelope: fieldsAsRecord(metadata.sealEnvelope) as PackManifest["sealEnvelope"],
+      walrusMetadata: {
+        octopus_repo_id: input.repoId,
+        octopus_repo_object_id: input.repoObjectId,
+        octopus_owner: input.owner,
+        octopus_ref: refName,
+        octopus_manifest_id: asString(metadata.localManifestId) || asString(value.manifest_id),
+        octopus_seq: String(seq),
+        octopus_artifact_digest: artifactDigest,
+        octopus_visibility: input.visibility,
+        octopus_package_id: config.suiPackageId ?? ""
+      },
+      isSnapshot: Boolean(value.is_snapshot),
+      createdAtMs: asNumber(value.created_at_ms),
+      seq
+    };
+
+    const local =
+      localByKey.byFullKey.get(localManifestKey(manifest)) ??
+      localByKey.byShortKey.get(localManifestShortKey(manifest));
+    const mergedStoredArtifactDigest = manifest.storedArtifactDigest || local?.storedArtifactDigest;
+    manifests.push({
+      ...manifest,
+      storedArtifactDigest: mergedStoredArtifactDigest,
+      sealEnvelope: manifest.sealEnvelope?.mode ? manifest.sealEnvelope : local?.sealEnvelope,
+      encrypted: manifest.encrypted || local?.encrypted === true,
+      artifactPath: local?.artifactPath ??
+        join(config.dataDir, "walrus", "blobs", `${mergedStoredArtifactDigest ?? artifactDigest}.bundle`),
+      storageMode: manifest.storageMode ?? local?.storageMode ?? "walrus-relay"
+    });
+  }
+
+  return manifests.sort((a, b) => a.seq - b.seq || a.manifestId.localeCompare(b.manifestId));
+};
+
+const readTestnetRepoState = async (
+  config: ServerConfig,
+  owner: string,
+  repo: string
+): Promise<SuiRepoState | null> => {
+  if (config.suiMode !== "testnet") {
+    return null;
+  }
+
+  const client = testnetClient(config);
+  const repoObjectId = await resolveTestnetRepoObjectId(config, client, owner, repo);
+  if (!repoObjectId) {
+    return null;
+  }
+
+  const object = await client.getObject({
+    id: repoObjectId,
+    options: { showContent: true }
+  });
+  const fields = moveFields(object.data?.content);
+  const repoId = asString(fields.repo_id) || `${owner}/${repo}`;
+  const visibility = visibilityFromCode(fields.visibility);
+  const refsTableId = tableId(fields.refs);
+  const manifestsTableId = tableId(fields.manifests);
+  const updatedAtMs = Date.now();
+
+  return {
+    registryMode: "testnet",
+    repoObjectId,
+    repoId,
+    owner,
+    ownerWallet: asString(fields.owner),
+    repo,
+    visibility,
+    defaultBranch: asString(fields.default_branch) || "refs/heads/main",
+    refs: await readTestnetRefs(client, refsTableId),
+    manifests: await readTestnetRepoManifests(config, client, {
+      owner,
+      repo,
+      repoId,
+      repoObjectId,
+      visibility,
+      manifestsTableId
+    }),
+    readers: await readAddressTableKeys(client, tableId(fields.readers)),
+    writers: await readAddressTableKeys(client, tableId(fields.writers)),
+    createdAtMs: asNumber(fields.created_at_ms),
+    updatedAtMs
+  };
+};
+
 export const readSuiRepoState = async (
   config: ServerConfig,
   owner: string,
   repo: string
 ): Promise<SuiRepoState | null> => {
-  return await readRepoStateFile(config, owner, repo);
+  return (await readSuiRepoStateForAuthorization(config, owner, repo)).state;
+};
+
+export const readSuiRepoStateForAuthorization = async (
+  config: ServerConfig,
+  owner: string,
+  repo: string
+): Promise<SuiRepoStateAuthorizationResult> => {
+  if (config.suiMode === "testnet") {
+    try {
+      const state = await readTestnetRepoState(config, owner, repo);
+      if (state) {
+        return {
+          state,
+          source: "sui-testnet",
+          authoritative: true
+        };
+      }
+      return {
+        state: null,
+        source: "sui-testnet",
+        authoritative: true
+      };
+    } catch (error) {
+      // Fall back to the local mirror if the testnet RPC is temporarily unavailable.
+      return {
+        state: await readRepoStateFile(config, owner, repo),
+        source: "sui-local",
+        authoritative: false,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
+  }
+
+  return {
+    state: await readRepoStateFile(config, owner, repo),
+    source: "sui-local",
+    authoritative: true
+  };
 };
 
 export const listSuiRepoStates = async (config: ServerConfig): Promise<SuiRepoState[]> => {
@@ -197,6 +774,31 @@ export const readSuiRepoManifests = async (
   owner: string,
   repo: string
 ): Promise<PackManifest[]> => {
-  const state = await readSuiRepoState(config, owner, repo);
-  return state?.manifests ?? [];
+  return (await readSuiRepoManifestsWithSource(config, owner, repo)).manifests;
+};
+
+export const readSuiRepoManifestsWithSource = async (
+  config: ServerConfig,
+  owner: string,
+  repo: string
+): Promise<SuiManifestReadResult> => {
+  if (config.suiMode === "testnet") {
+    try {
+      const state = await readTestnetRepoState(config, owner, repo);
+      if (state) {
+        return {
+          manifests: state.manifests,
+          source: "sui-testnet"
+        };
+      }
+    } catch {
+      // Fall back to the local mirror if the testnet RPC is temporarily unavailable.
+    }
+  }
+
+  const state = await readRepoStateFile(config, owner, repo);
+  return {
+    manifests: state?.manifests ?? [],
+    source: "sui-local"
+  };
 };

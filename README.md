@@ -36,20 +36,64 @@ Run the local server:
 pnpm dev:server
 ```
 
-Open `http://127.0.0.1:18787/` to view the minimal repository list UI.
+Open `http://127.0.0.1:48787/` to view the minimal repository list UI.
 
-By default pushed artifacts are cached locally under `data/walrus/blobs`. To also
-store pushed bundles through a local Walrus CLI, set:
+Run the wallet login page:
+
+```bash
+pnpm dev:web
+```
+
+Then authenticate the CLI and connect a Git remote:
+
+```bash
+pnpm octopus auth login --server http://127.0.0.1:48787 --web-url http://127.0.0.1:45173
+pnpm octopus repo create demo --owner ducnmm --public
+pnpm octopus repo connect ducnmm/demo --remote origin --server http://127.0.0.1:48787
+git push origin main
+```
+
+In testnet mode the server exposes the deployed package and registry IDs from
+`/v1/auth/config`, so login opens the on-chain wallet approval flow and registers
+the CLI/server delegate keys before credentials are saved.
+
+By default pushed artifacts are cached locally under `data/walrus/blobs`. To
+store pushed bundles through the Walrus upload relay, set a server Sui key with
+WAL/SUI funds:
+
+```bash
+OCTOPUS_WALRUS_MODE=relay
+OCTOPUS_WALRUS_EPOCHS=50
+SERVER_SUI_PRIVATE_KEYS=suiprivkey...
+WALRUS_NETWORK=testnet
+```
+
+`WALRUS_UPLOAD_RELAY_URL` defaults to the selected network relay
+(`https://upload-relay.testnet.walrus.space` on testnet). To use the local
+Walrus CLI instead of the relay, set:
 
 ```bash
 OCTOPUS_WALRUS_MODE=cli
-OCTOPUS_WALRUS_EPOCHS=5
+OCTOPUS_WALRUS_EPOCHS=50
 WALRUS_BIN=walrus
 ```
 
 For restore from a real Walrus blob without shelling out to `walrus read`, set
 `WALRUS_AGGREGATOR_URL` to the target network aggregator, for example
 `https://aggregator.walrus-testnet.walrus.space`.
+
+Private artifacts default to `local-seal` for local development and existing
+testnet package compatibility. To use SEAL key-server access control, deploy the
+Move package that includes `registry::seal_approve(id, repo, account)` and set:
+
+```bash
+OCTOPUS_SEAL_MODE=seal
+SEAL_THRESHOLD=1
+SEAL_KEY_SERVERS=0x...
+```
+
+`SEAL_SERVER_CONFIGS` can be used instead of `SEAL_KEY_SERVERS` for weighted or
+aggregator-backed key server configs.
 
 During local development the Sui registry path is mirrored under
 `data/sui/repos`. This gives push/restore tests the same ref-manifest shape as
@@ -82,19 +126,19 @@ cd contracts/sui && sui move test
 ```bash
 octopus auth login
 octopus repo create demo
-git remote add origin http://127.0.0.1:18787/ducnmm/demo.git
+git remote add origin http://127.0.0.1:48787/ducnmm/demo.git
 git push origin main
 
 rm -rf ./data/repos/ducnmm/demo.git
 
 octopus repo restore ducnmm/demo
-git clone http://127.0.0.1:18787/ducnmm/demo.git restored-demo
+git clone http://127.0.0.1:48787/ducnmm/demo.git restored-demo
 ```
 
 Expected result: the restored clone has the same Git commit hash as the original repository.
 
 ## Current Status
 
-- Implemented: local Git HTTP push/clone, bare repo cache, snapshot bundle artifacts, SHA-256 manifests, local Sui registry mirror, restore from Sui-shaped manifests, Walrus CLI upload mode, and Walrus Aggregator download mode.
-- Scaffolded: Sui Move package with account, delegate, repo, ref state, and `push_ref` objects/functions.
-- Not yet implemented: wallet login, live Sui transaction submission, live Sui manifest query during restore, file browser, commit list, and indexer surfaces.
+- Implemented: local Git HTTP push/clone, delegate-key CLI auth, repo-local Git `http.extraHeader` setup, authenticated push authorization, bare repo cache, snapshot bundle artifacts, SHA-256 manifests, local Sui registry mirror, restore from Sui-shaped manifests, Walrus CLI upload mode, Walrus Aggregator download mode, local private artifact encryption, feature-flagged SEAL private artifact encryption, and a Vite wallet login page.
+- Scaffolded: Sui testnet adapter for delegate verification, `create_repo`, `push_ref`, and `seal_approve`; Postgres schema migration for accounts/repos/manifests/artifacts/push attempts; Sui Move package with account, delegate, private read allow list, and delegate-authorized `push_ref`.
+- Not yet implemented: Walrus relay blob-attribute/ownership transfer, file browser, commit list, and indexer surfaces.

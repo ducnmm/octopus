@@ -11,7 +11,8 @@ import {
 } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
-import { storeArtifact } from "./walrus.js";
+import { encryptArtifactForRepo, type SealEnvelope } from "./seal.js";
+import { storeArtifact, writeArtifactMetadata, type WalrusBlobMetadata } from "./walrus.js";
 
 export type GitRefMap = Map<string, string>;
 
@@ -26,9 +27,14 @@ export type PackManifest = {
   walrusBlobId: string;
   walrusBlobObjectId?: string;
   artifactDigest: string;
+  storedArtifactDigest?: string;
   artifactSizeBytes: number;
   artifactPath: string;
-  storageMode: "local" | "walrus-cli";
+  storageMode: "local" | "walrus-cli" | "walrus-relay";
+  visibility: "public" | "private";
+  encrypted: boolean;
+  sealEnvelope?: SealEnvelope;
+  walrusMetadata: WalrusBlobMetadata;
   isSnapshot: boolean;
   createdAtMs: number;
   seq: number;
@@ -149,6 +155,19 @@ export const createPushArtifacts = async (input: {
   repo: string;
   beforeRefs: GitRefMap;
   afterRefs: GitRefMap;
+  visibility?: "public" | "private";
+  repoObjectId?: string;
+  packageId?: string;
+  accountId?: string;
+  sealMode?: "local" | "seal";
+  walrusNetwork?: string;
+  walrusUploadRelayUrl?: string;
+  suiRpcUrl?: string;
+  suiNetwork?: string;
+  serverSuiPrivateKeys?: string[];
+  sealServerConfigs?: string;
+  sealKeyServers?: string[];
+  sealThreshold?: number;
 }): Promise<PackManifest[]> => {
   const refs = changedRefs(input.beforeRefs, input.afterRefs);
   if (refs.length === 0) {
@@ -163,10 +182,36 @@ export const createPushArtifacts = async (input: {
 
     const digest = await sha256File(bundlePath);
     const artifactStats = await stat(bundlePath);
+    const repoId = `${input.owner}/${input.repo}`;
+    const visibility = input.visibility ?? "public";
+    const sourcePath =
+      visibility === "private" ? join(tmpArtifactDir, "snapshot.bundle.sealed") : bundlePath;
+    const sealEnvelope =
+      visibility === "private"
+        ? await encryptArtifactForRepo({
+            sourcePath: bundlePath,
+            outputPath: sourcePath,
+            repoId,
+            packageId: input.packageId,
+            repoObjectId: input.repoObjectId,
+            accountId: input.accountId,
+            sealMode: input.sealMode,
+            suiRpcUrl: input.suiRpcUrl,
+            suiNetwork: input.suiNetwork,
+            sealServerConfigs: input.sealServerConfigs,
+            sealKeyServers: input.sealKeyServers,
+            sealThreshold: input.sealThreshold
+          })
+        : undefined;
+    const storedDigest = visibility === "private" ? await sha256File(sourcePath) : digest;
     const storedArtifact = await storeArtifact({
       dataDir: input.dataDir,
-      sourcePath: bundlePath,
-      artifactDigest: digest
+      sourcePath,
+      artifactDigest: storedDigest,
+      walrusNetwork: input.walrusNetwork,
+      walrusUploadRelayUrl: input.walrusUploadRelayUrl,
+      suiRpcUrl: input.suiRpcUrl,
+      serverSuiPrivateKeys: input.serverSuiPrivateKeys
     });
 
     const manifestDir = join(input.dataDir, "manifests", input.owner, input.repo);
@@ -180,7 +225,7 @@ export const createPushArtifacts = async (input: {
       const manifestId = `${String(seq).padStart(8, "0")}-${refSlug(ref.refName)}-${digest.slice(0, 12)}`;
       const manifest: PackManifest = {
         manifestId,
-        repoId: `${input.owner}/${input.repo}`,
+        repoId,
         owner: input.owner,
         repo: input.repo,
         refName: ref.refName,
@@ -189,14 +234,34 @@ export const createPushArtifacts = async (input: {
         walrusBlobId: storedArtifact.blobId,
         walrusBlobObjectId: storedArtifact.blobObjectId,
         artifactDigest: digest,
+        storedArtifactDigest: storedDigest,
         artifactSizeBytes: artifactStats.size,
         artifactPath: storedArtifact.storedArtifactPath,
         storageMode: storedArtifact.storageMode,
+        visibility,
+        encrypted: visibility === "private",
+        sealEnvelope,
+        walrusMetadata: {
+          octopus_repo_id: repoId,
+          octopus_repo_object_id: input.repoObjectId ?? "",
+          octopus_owner: input.owner,
+          octopus_ref: ref.refName,
+          octopus_manifest_id: manifestId,
+          octopus_seq: String(seq),
+          octopus_artifact_digest: digest,
+          octopus_visibility: visibility,
+          octopus_package_id: input.packageId ?? ""
+        },
         isSnapshot: true,
         createdAtMs,
         seq
       };
 
+      await writeArtifactMetadata({
+        dataDir: input.dataDir,
+        artifactDigest: storedDigest,
+        metadata: manifest.walrusMetadata
+      });
       await writeFile(
         join(manifestDir, `${manifestId}.json`),
         `${JSON.stringify(manifest, null, 2)}\n`

@@ -1,6 +1,7 @@
 #[allow(lint(public_entry))]
 module octopus::registry {
     use std::string::String;
+    use sui::bcs;
     use sui::event;
     use sui::table::{Self, Table};
     use octopus::account::{Self, OctopusAccount};
@@ -15,6 +16,8 @@ module octopus::registry {
     const EInvalidVisibility: u64 = 203;
     const ENotWriter: u64 = 204;
     const EWrongVersion: u64 = 205;
+    const ENotReader: u64 = 206;
+    const EInvalidSealKey: u64 = 207;
 
     public struct RepoRegistry has key {
         id: UID,
@@ -32,6 +35,7 @@ module octopus::registry {
         default_branch: String,
         refs: Table<String, RefState>,
         manifests: Table<u64, PackManifest>,
+        readers: Table<address, bool>,
         writers: Table<address, bool>,
         next_seq: u64,
         active: bool,
@@ -116,6 +120,7 @@ module octopus::registry {
             default_branch,
             refs: table::new(ctx),
             manifests: table::new(ctx),
+            readers: table::new(ctx),
             writers: table::new(ctx),
             next_seq: 1,
             active: true,
@@ -151,6 +156,22 @@ module octopus::registry {
         };
     }
 
+    public entry fun add_reader(repo: &mut Repo, reader: address, ctx: &TxContext) {
+        assert_current_repo(repo);
+        assert!(repo.owner == ctx.sender(), ENotWriter);
+        if (!table::contains(&repo.readers, reader)) {
+            table::add(&mut repo.readers, reader, true);
+        };
+    }
+
+    public entry fun remove_reader(repo: &mut Repo, reader: address, ctx: &TxContext) {
+        assert_current_repo(repo);
+        assert!(repo.owner == ctx.sender(), ENotWriter);
+        if (table::contains(&repo.readers, reader)) {
+            let _ = table::remove(&mut repo.readers, reader);
+        };
+    }
+
     public entry fun set_visibility(repo: &mut Repo, visibility: u8, ctx: &TxContext) {
         assert_current_repo(repo);
         assert!(repo.owner == ctx.sender(), ENotWriter);
@@ -166,6 +187,7 @@ module octopus::registry {
 
     public entry fun push_ref(
         repo: &mut Repo,
+        account: &OctopusAccount,
         ref_name: String,
         expected_old_commit: String,
         new_commit: String,
@@ -179,7 +201,7 @@ module octopus::registry {
         ctx: &mut TxContext,
     ) {
         assert_current_repo(repo);
-        assert!(is_writer(repo, ctx.sender()), ENotWriter);
+        assert!(is_writer_for_account(repo, account, ctx.sender()), ENotWriter);
         assert_expected_old_commit(repo, ref_name, expected_old_commit);
 
         let seq = repo.next_seq;
@@ -233,6 +255,42 @@ module octopus::registry {
 
     fun is_writer(repo: &Repo, caller: address): bool {
         caller == repo.owner || table::contains(&repo.writers, caller)
+    }
+
+    fun is_writer_for_account(repo: &Repo, account: &OctopusAccount, caller: address): bool {
+        let account_owner = account::owner(account);
+        assert!(account_owner == repo.owner, ENotWriter);
+        account::can_manage_account(account, caller) || is_writer(repo, caller)
+    }
+
+    fun is_reader(repo: &Repo, caller: address): bool {
+        repo.visibility == VISIBILITY_PUBLIC ||
+            is_writer(repo, caller) ||
+            table::contains(&repo.readers, caller)
+    }
+
+    public fun can_read(repo: &Repo, account: &OctopusAccount, caller: address): bool {
+        let account_owner = account::owner(account);
+        if (account_owner == repo.owner && account::can_manage_account(account, caller)) {
+            true
+        } else {
+            is_reader(repo, caller)
+        }
+    }
+
+    public entry fun seal_approve(
+        id: vector<u8>,
+        repo: &Repo,
+        account: &OctopusAccount,
+        ctx: &TxContext,
+    ) {
+        assert_current_repo(repo);
+        assert!(id == seal_key_id(repo), EInvalidSealKey);
+        assert!(can_read(repo, account, ctx.sender()), ENotReader);
+    }
+
+    public fun seal_key_id(repo: &Repo): vector<u8> {
+        bcs::to_bytes(&object::id(repo))
     }
 
     fun assert_expected_old_commit(repo: &Repo, ref_name: String, expected_old_commit: String) {
