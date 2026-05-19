@@ -6,7 +6,8 @@ import { ownerNameSchema, repoNameSchema } from "@octopus/shared";
 import { parseDelegateAuth, type AuthContext } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import { createPushArtifacts, listRefs } from "./artifacts.js";
-import { anchorPushManifests, canReadRepo, canWriteRepo, readSuiRepoStateForAuthorization } from "./sui.js";
+import { indexRepository } from "./indexer.js";
+import { anchorPushManifests, canReadRepo, canWriteRepo, readSuiRepoState, readSuiRepoStateForAuthorization } from "./sui.js";
 import { recordPushAttempt } from "./push-attempts.js";
 
 type GitResult = {
@@ -266,6 +267,7 @@ export const handleGitHttp = async (
         suiRpcUrl: config.suiRpcUrl,
         suiNetwork: config.suiNetwork,
         serverSuiPrivateKeys: config.serverSuiPrivateKeys,
+        walrusOwnerAddress: repoState?.ownerWallet ?? auth?.walletAddress,
         sealServerConfigs: config.sealServerConfigs,
         sealKeyServers: config.sealKeyServers,
         sealThreshold: config.sealThreshold
@@ -285,6 +287,10 @@ export const handleGitHttp = async (
         reply.header("x-octopus-artifact-digest", manifests[0]?.artifactDigest ?? "");
         reply.header("x-octopus-anchor-count", String(anchors.length));
         reply.header("x-octopus-registry-mode", anchors[0]?.registryMode ?? config.suiMode);
+        const indexedState = await readSuiRepoState(config, repoRef.owner, repoRef.repo);
+        if (indexedState) {
+          indexRepository(config, indexedState).catch(() => undefined);
+        }
       }
     } catch (error) {
       await recordPushAttempt(config, {

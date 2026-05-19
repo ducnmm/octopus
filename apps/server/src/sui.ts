@@ -364,6 +364,8 @@ const pushRefOnTestnet = async (
     encrypted: manifest.encrypted,
     storedArtifactDigest: manifest.storedArtifactDigest ?? manifest.artifactDigest,
     storageMode: manifest.storageMode,
+    walrusBlobOwnerAddress: manifest.walrusBlobOwnerAddress,
+    walrusOwnershipTransferred: manifest.walrusOwnershipTransferred ?? false,
     sealEnvelope: manifest.sealEnvelope ?? null
   });
   const tx = new Transaction();
@@ -597,6 +599,8 @@ const readTestnetRepoManifests = async (
       artifactSizeBytes: asNumber(value.artifact_size_bytes),
       artifactPath: join(config.dataDir, "walrus", "blobs", `${artifactCacheDigest}.bundle`),
       storageMode: asString(metadata.storageMode) === "local" ? "local" : "walrus-relay",
+      walrusBlobOwnerAddress: asString(metadata.walrusBlobOwnerAddress) || undefined,
+      walrusOwnershipTransferred: metadata.walrusOwnershipTransferred === true,
       visibility: asString(metadata.visibility) === "private" ? "private" : input.visibility,
       encrypted:
         typeof metadata.encrypted === "boolean"

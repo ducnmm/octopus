@@ -26,6 +26,8 @@
 - [x] Sui testnet adapter scaffold for delegate verification/create_repo/push_ref
 - [x] Private repo artifact encryption in local mode
 - [x] Postgres schema for testnet metadata tables
+- [x] Walrus relay blob attributes and owner transfer
+- [x] File browser, file viewer, commit list, and local index surfaces
 
 ## Open Questions
 

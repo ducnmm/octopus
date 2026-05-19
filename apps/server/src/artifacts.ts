@@ -12,7 +12,7 @@ import {
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { encryptArtifactForRepo, type SealEnvelope } from "./seal.js";
-import { storeArtifact, writeArtifactMetadata, type WalrusBlobMetadata } from "./walrus.js";
+import { storeArtifact, type WalrusBlobMetadata } from "./walrus.js";
 
 export type GitRefMap = Map<string, string>;
 
@@ -31,6 +31,8 @@ export type PackManifest = {
   artifactSizeBytes: number;
   artifactPath: string;
   storageMode: "local" | "walrus-cli" | "walrus-relay";
+  walrusBlobOwnerAddress?: string;
+  walrusOwnershipTransferred?: boolean;
   visibility: "public" | "private";
   encrypted: boolean;
   sealEnvelope?: SealEnvelope;
@@ -165,6 +167,7 @@ export const createPushArtifacts = async (input: {
   suiRpcUrl?: string;
   suiNetwork?: string;
   serverSuiPrivateKeys?: string[];
+  walrusOwnerAddress?: string;
   sealServerConfigs?: string;
   sealKeyServers?: string[];
   sealThreshold?: number;
@@ -204,27 +207,51 @@ export const createPushArtifacts = async (input: {
           })
         : undefined;
     const storedDigest = visibility === "private" ? await sha256File(sourcePath) : digest;
+    const manifestDir = join(input.dataDir, "manifests", input.owner, input.repo);
+    await mkdir(manifestDir, { recursive: true });
+
+    const firstSeq = await nextManifestSequence(manifestDir);
+    const createdAtMs = Date.now();
+    const plannedRefs = refs.map((ref, index) => {
+      const seq = firstSeq + index;
+      return {
+        ...ref,
+        seq,
+        manifestId: `${String(seq).padStart(8, "0")}-${refSlug(ref.refName)}-${digest.slice(0, 12)}`
+      };
+    });
+    const artifactWalrusMetadata: WalrusBlobMetadata = {
+      octopus_app: "octopus",
+      octopus_repo_id: repoId,
+      octopus_repo_object_id: input.repoObjectId ?? "",
+      octopus_owner: input.owner,
+      octopus_repo: input.repo,
+      octopus_visibility: visibility,
+      octopus_package_id: input.packageId ?? "",
+      octopus_artifact_digest: digest,
+      octopus_stored_artifact_digest: storedDigest,
+      octopus_ref_count: String(plannedRefs.length),
+      octopus_refs: plannedRefs.map((ref) => ref.refName).join("\n"),
+      octopus_manifest_ids: plannedRefs.map((ref) => ref.manifestId).join("\n"),
+      octopus_first_seq: String(firstSeq)
+    };
     const storedArtifact = await storeArtifact({
       dataDir: input.dataDir,
       sourcePath,
       artifactDigest: storedDigest,
+      metadata: artifactWalrusMetadata,
       walrusNetwork: input.walrusNetwork,
       walrusUploadRelayUrl: input.walrusUploadRelayUrl,
       suiRpcUrl: input.suiRpcUrl,
-      serverSuiPrivateKeys: input.serverSuiPrivateKeys
+      serverSuiPrivateKeys: input.serverSuiPrivateKeys,
+      walrusOwnerAddress: input.walrusOwnerAddress
     });
 
-    const manifestDir = join(input.dataDir, "manifests", input.owner, input.repo);
-    await mkdir(manifestDir, { recursive: true });
-
     const manifests: PackManifest[] = [];
-    let seq = await nextManifestSequence(manifestDir);
-    const createdAtMs = Date.now();
 
-    for (const ref of refs) {
-      const manifestId = `${String(seq).padStart(8, "0")}-${refSlug(ref.refName)}-${digest.slice(0, 12)}`;
+    for (const ref of plannedRefs) {
       const manifest: PackManifest = {
-        manifestId,
+        manifestId: ref.manifestId,
         repoId,
         owner: input.owner,
         repo: input.repo,
@@ -238,36 +265,27 @@ export const createPushArtifacts = async (input: {
         artifactSizeBytes: artifactStats.size,
         artifactPath: storedArtifact.storedArtifactPath,
         storageMode: storedArtifact.storageMode,
+        walrusBlobOwnerAddress: storedArtifact.blobOwnerAddress,
+        walrusOwnershipTransferred: storedArtifact.ownershipTransferred,
         visibility,
         encrypted: visibility === "private",
         sealEnvelope,
         walrusMetadata: {
-          octopus_repo_id: repoId,
-          octopus_repo_object_id: input.repoObjectId ?? "",
-          octopus_owner: input.owner,
+          ...artifactWalrusMetadata,
           octopus_ref: ref.refName,
-          octopus_manifest_id: manifestId,
-          octopus_seq: String(seq),
-          octopus_artifact_digest: digest,
-          octopus_visibility: visibility,
-          octopus_package_id: input.packageId ?? ""
+          octopus_manifest_id: ref.manifestId,
+          octopus_seq: String(ref.seq)
         },
         isSnapshot: true,
         createdAtMs,
-        seq
+        seq: ref.seq
       };
 
-      await writeArtifactMetadata({
-        dataDir: input.dataDir,
-        artifactDigest: storedDigest,
-        metadata: manifest.walrusMetadata
-      });
       await writeFile(
-        join(manifestDir, `${manifestId}.json`),
+        join(manifestDir, `${ref.manifestId}.json`),
         `${JSON.stringify(manifest, null, 2)}\n`
       );
       manifests.push(manifest);
-      seq += 1;
     }
 
     return manifests;

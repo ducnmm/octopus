@@ -249,6 +249,70 @@ test("serves normal git push and clone through smart HTTP", async () => {
   expect(webBody).toContain("ducnmm/demo");
   expect(webBody).toContain(pushedCommit.slice(0, 12));
 
+  const indexResponse = await fetch(new URL("/v1/repos/ducnmm/demo/index", baseUrl));
+  expect(indexResponse.status).toBe(200);
+  const indexBody = (await indexResponse.json()) as {
+    index: {
+      repoId: string;
+      headCommit: string;
+      commitCount: number;
+      treeEntryCount: number;
+      treeEntries: Array<{ path: string; type: string }>;
+    };
+  };
+  expect(indexBody.index).toMatchObject({
+    repoId: "ducnmm/demo",
+    headCommit: pushedCommit,
+    commitCount: 1,
+    treeEntryCount: 1
+  });
+  expect(indexBody.index.treeEntries[0]).toMatchObject({
+    path: "README.md",
+    type: "blob"
+  });
+
+  const commitsResponse = await fetch(new URL("/v1/repos/ducnmm/demo/commits", baseUrl));
+  expect(commitsResponse.status).toBe(200);
+  const commitsBody = (await commitsResponse.json()) as {
+    commits: Array<{ oid: string; subject: string }>;
+  };
+  expect(commitsBody.commits[0]).toMatchObject({
+    oid: pushedCommit,
+    subject: "initial commit"
+  });
+
+  const treeResponse = await fetch(new URL("/v1/repos/ducnmm/demo/tree", baseUrl));
+  expect(treeResponse.status).toBe(200);
+  const treeBody = (await treeResponse.json()) as {
+    entries: Array<{ path: string; type: string; size: number }>;
+  };
+  expect(treeBody.entries[0]).toMatchObject({
+    path: "README.md",
+    type: "blob",
+    size: "hello octopus\n".length
+  });
+
+  const blobResponse = await fetch(new URL("/v1/repos/ducnmm/demo/blob?path=README.md", baseUrl));
+  expect(blobResponse.status).toBe(200);
+  const blobBody = (await blobResponse.json()) as {
+    file: { path: string; encoding: string; content: string };
+  };
+  expect(blobBody.file).toMatchObject({
+    path: "README.md",
+    encoding: "utf8",
+    content: "hello octopus\n"
+  });
+
+  const repoPageResponse = await fetch(new URL("/ducnmm/demo", baseUrl));
+  expect(repoPageResponse.status).toBe(200);
+  const repoPage = await repoPageResponse.text();
+  expect(repoPage).toContain("README.md");
+  expect(repoPage).toContain("initial commit");
+
+  const filePageResponse = await fetch(new URL("/ducnmm/demo/blob?path=README.md", baseUrl));
+  expect(filePageResponse.status).toBe(200);
+  await expect(filePageResponse.text()).resolves.toContain("hello octopus");
+
   const suiState = await readSuiRepoState(
     config,
     "ducnmm",

@@ -3,7 +3,7 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
-import type { Transaction } from "@mysten/sui/transactions";
+import { Transaction } from "@mysten/sui/transactions";
 import { fromHex } from "@mysten/sui/utils";
 import { WalrusClient, blobIdFromInt } from "@mysten/walrus";
 import { envInt } from "@octopus/shared";
@@ -17,6 +17,8 @@ export type ArtifactStoreResult = {
   alreadyExisted: boolean;
   storageDurationEpochs: number;
   storageMode: WalrusStorageMode;
+  blobOwnerAddress?: string;
+  ownershipTransferred?: boolean;
 };
 
 export type WalrusBlobMetadata = Record<string, string>;
@@ -32,6 +34,8 @@ type WalrusStoreResult = {
   blobObjectId?: string;
   storageDurationEpochs: number;
   alreadyExisted: boolean;
+  blobOwnerAddress?: string;
+  ownershipTransferred?: boolean;
 };
 
 type WalrusNetwork = "testnet" | "mainnet";
@@ -282,6 +286,21 @@ const objectIdString = (value: unknown): string | undefined => {
   return undefined;
 };
 
+const isSuiAddress = (value: string | undefined): value is string => {
+  return Boolean(value && /^0x[0-9a-fA-F]{64}$/.test(value));
+};
+
+const transferBlobObject = async (
+  signer: RelaySigner,
+  blobObjectId: string,
+  ownerAddress: string
+): Promise<void> => {
+  const tx = new Transaction();
+  tx.transferObjects([tx.object(blobObjectId)], ownerAddress);
+  const digest = await executeWalrusTransaction(signer, tx);
+  await signer.client.waitForTransaction({ digest });
+};
+
 const storeWithWalrusRelay = async (
   artifactPath: string,
   input: {
@@ -289,6 +308,8 @@ const storeWithWalrusRelay = async (
     walrusUploadRelayUrl?: string;
     suiRpcUrl?: string;
     serverSuiPrivateKeys?: string[];
+    metadata?: WalrusBlobMetadata;
+    walrusOwnerAddress?: string;
   }
 ): Promise<WalrusStoreResult> => {
   const epochs = envInt(process.env.OCTOPUS_WALRUS_EPOCHS, DEFAULT_WALRUS_EPOCHS);
@@ -305,12 +326,14 @@ const storeWithWalrusRelay = async (
 
   await flow.encode();
 
+  const attributes = input.metadata && Object.keys(input.metadata).length > 0 ? input.metadata : undefined;
   const registerDigest = await executeWalrusTransaction(
     signer,
     flow.register({
       epochs,
       owner: signer.address,
-      deletable: true
+      deletable: true,
+      attributes
     })
   );
   await signer.client.waitForTransaction({ digest: registerDigest });
@@ -328,11 +351,19 @@ const storeWithWalrusRelay = async (
     throw new Error("Walrus relay upload did not return blob metadata");
   }
 
+  const finalOwner = isSuiAddress(input.walrusOwnerAddress) ? input.walrusOwnerAddress : signer.address;
+  const ownershipTransferred = finalOwner !== signer.address;
+  if (ownershipTransferred) {
+    await transferBlobObject(signer, blobObjectId, finalOwner);
+  }
+
   return {
     blobId,
     blobObjectId,
     storageDurationEpochs: epochs,
-    alreadyExisted: false
+    alreadyExisted: false,
+    blobOwnerAddress: finalOwner,
+    ownershipTransferred
   };
 };
 
@@ -363,6 +394,7 @@ export const storeArtifact = async (input: {
   walrusUploadRelayUrl?: string;
   suiRpcUrl?: string;
   serverSuiPrivateKeys?: string[];
+  walrusOwnerAddress?: string;
 }): Promise<ArtifactStoreResult> => {
   const blobDir = join(input.dataDir, "walrus", "blobs");
   await mkdir(blobDir, { recursive: true });
@@ -397,7 +429,9 @@ export const storeArtifact = async (input: {
       storedArtifactPath,
       alreadyExisted: result.alreadyExisted,
       storageDurationEpochs: result.storageDurationEpochs,
-      storageMode: "walrus-relay"
+      storageMode: "walrus-relay",
+      blobOwnerAddress: result.blobOwnerAddress,
+      ownershipTransferred: result.ownershipTransferred
     };
   }
 

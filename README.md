@@ -37,6 +37,10 @@ pnpm dev:server
 ```
 
 Open `http://127.0.0.1:48787/` to view the minimal repository list UI.
+Repository detail pages are available at `/{owner}/{repo}` with a file tree,
+file viewer, commit list, and index metadata. The same indexed surfaces are
+available as JSON under `/v1/repos/{owner}/{repo}/index`, `/commits`, `/tree`,
+and `/blob?path=...`.
 
 Run the wallet login page:
 
@@ -59,7 +63,8 @@ the CLI/server delegate keys before credentials are saved.
 
 By default pushed artifacts are cached locally under `data/walrus/blobs`. To
 store pushed bundles through the Walrus upload relay, set a server Sui key with
-WAL/SUI funds:
+WAL/SUI funds. Relay uploads register Octopus metadata attributes on the Blob
+object and transfer ownership to the repository owner wallet after certification:
 
 ```bash
 OCTOPUS_WALRUS_MODE=relay
@@ -139,6 +144,6 @@ Expected result: the restored clone has the same Git commit hash as the original
 
 ## Current Status
 
-- Implemented: local Git HTTP push/clone, delegate-key CLI auth, repo-local Git `http.extraHeader` setup, authenticated push authorization, bare repo cache, snapshot bundle artifacts, SHA-256 manifests, local Sui registry mirror, restore from Sui-shaped manifests, Walrus CLI upload mode, Walrus Aggregator download mode, local private artifact encryption, feature-flagged SEAL private artifact encryption, and a Vite wallet login page.
+- Implemented: local Git HTTP push/clone, delegate-key CLI auth, repo-local Git `http.extraHeader` setup, authenticated push authorization, bare repo cache, snapshot bundle artifacts, SHA-256 manifests, local Sui registry mirror, restore from Sui-shaped manifests, Walrus CLI upload mode, Walrus upload relay mode with blob attributes and owner transfer, Walrus Aggregator download mode, local private artifact encryption, feature-flagged SEAL private artifact encryption, local file/commit indexing, repository file browser, file viewer, commit list, JSON index surfaces, and a Vite wallet login page.
 - Scaffolded: Sui testnet adapter for delegate verification, `create_repo`, `push_ref`, and `seal_approve`; Postgres schema migration for accounts/repos/manifests/artifacts/push attempts; Sui Move package with account, delegate, private read allow list, and delegate-authorized `push_ref`.
-- Not yet implemented: Walrus relay blob-attribute/ownership transfer, file browser, commit list, and indexer surfaces.
+- Not yet implemented: hosted production indexer worker, code search, pull request review surfaces, issue tracker, CI, and organization/team permission model.

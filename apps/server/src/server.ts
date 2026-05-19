@@ -5,9 +5,11 @@ import { readRepoManifests } from "./artifacts.js";
 import { identityFromPrivateKey, parseDelegateAuth, registerLocalDelegate, redactDelegateSecrets } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import { handleGitHttp, initBareRepository } from "./git.js";
+import { bareRepoPath } from "./git.js";
+import { ensureRepoIndex, indexRepository, readBlob, readCommits, readTree } from "./indexer.js";
 import { restoreRepository } from "./restore.js";
-import { canReadRepo, ensureSuiRepo, listSuiRepoStates, readSuiRepoState } from "./sui.js";
-import { renderRepoListPage, toRepoListItem } from "./web.js";
+import { canReadRepo, ensureSuiRepo, listSuiRepoStates, readSuiRepoState, type SuiRepoState } from "./sui.js";
+import { renderBlobPage, renderRepoListPage, renderRepoPage, toRepoListItem } from "./web.js";
 
 const hasDelegateAuth = (request: { headers: Record<string, unknown> }): boolean => {
   return Boolean(
@@ -86,6 +88,52 @@ export const buildServer = (config: ServerConfig) => {
     return states.filter((state) => canReadRepo(state, auth)).map(toRepoListItem);
   };
 
+  const authorizedRepoState = async (
+    request: { headers: Record<string, unknown> },
+    owner: string,
+    repo: string
+  ): Promise<SuiRepoState> => {
+    const state = await readSuiRepoState(config, owner, repo);
+    if (!state) {
+      const error = new Error("Repository state not found") as Error & { statusCode: number };
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (state.visibility === "private") {
+      let auth = null;
+      try {
+        auth = await parseDelegateAuth(config, request as never);
+      } catch (error) {
+        const nextError = new Error(error instanceof Error ? error.message : String(error)) as Error & {
+          statusCode: number;
+        };
+        nextError.statusCode = 401;
+        throw nextError;
+      }
+
+      if (!canReadRepo(state, auth)) {
+        const error = new Error("Not authorized to read this repository") as Error & { statusCode: number };
+        error.statusCode = 403;
+        throw error;
+      }
+    }
+
+    return state;
+  };
+
+  const queryString = (value: unknown): string | undefined => {
+    return typeof value === "string" && value.trim() ? value : undefined;
+  };
+
+  const queryInt = (value: unknown, fallback: number): number => {
+    if (typeof value !== "string") {
+      return fallback;
+    }
+    const parsed = Number.parseInt(value, 10);
+    return Number.isNaN(parsed) ? fallback : parsed;
+  };
+
   app.get("/", async (request, reply) => {
     const repos = await visibleRepoItems(request);
     await reply.type("text/html; charset=utf-8").send(renderRepoListPage(repos));
@@ -94,6 +142,81 @@ export const buildServer = (config: ServerConfig) => {
   app.get("/v1/repos", async (request) => {
     return {
       repos: await visibleRepoItems(request)
+    };
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+  }>("/v1/repos/:owner/:repo/index", async (request) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    return {
+      index: await ensureRepoIndex(config, state)
+    };
+  });
+
+  app.post<{
+    Params: { owner: string; repo: string };
+  }>("/v1/repos/:owner/:repo/index", async (request, reply) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    await reply.code(202).send({
+      index: await indexRepository(config, state)
+    });
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+    Querystring: { ref?: string; limit?: string };
+  }>("/v1/repos/:owner/:repo/commits", async (request) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    const ref = queryString(request.query.ref) ?? state.defaultBranch;
+    const limit = Math.max(1, Math.min(queryInt(request.query.limit, 50), 500));
+    const index = await ensureRepoIndex(config, state);
+    const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
+    return {
+      repoId: state.repoId,
+      ref,
+      indexedAtMs: index.indexedAtMs,
+      commits: await readCommits(repoPath, ref, limit)
+    };
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+    Querystring: { ref?: string; path?: string };
+  }>("/v1/repos/:owner/:repo/tree", async (request) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    const ref = queryString(request.query.ref) ?? state.defaultBranch;
+    const path = request.query.path ?? "";
+    const index = await ensureRepoIndex(config, state);
+    const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
+    return {
+      repoId: state.repoId,
+      ref,
+      path,
+      indexedAtMs: index.indexedAtMs,
+      entries: await readTree(repoPath, ref, path)
+    };
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+    Querystring: { ref?: string; path?: string };
+  }>("/v1/repos/:owner/:repo/blob", async (request) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    const ref = queryString(request.query.ref) ?? state.defaultBranch;
+    const path = queryString(request.query.path);
+    if (!path) {
+      const error = new Error("File path is required") as Error & { statusCode: number };
+      error.statusCode = 400;
+      throw error;
+    }
+    const index = await ensureRepoIndex(config, state);
+    const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
+    return {
+      repoId: state.repoId,
+      ref,
+      indexedAtMs: index.indexedAtMs,
+      file: await readBlob(repoPath, ref, path)
     };
   });
 
@@ -176,6 +299,10 @@ export const buildServer = (config: ServerConfig) => {
     }
 
     const result = await restoreRepository(config, request.params.owner, request.params.repo, auth);
+    const restoredState = await readSuiRepoState(config, request.params.owner, request.params.repo);
+    if (restoredState) {
+      await indexRepository(config, restoredState);
+    }
     await reply.code(200).send(result);
   });
 
@@ -209,6 +336,67 @@ export const buildServer = (config: ServerConfig) => {
     return {
       manifests: await readRepoManifests(config.dataDir, request.params.owner, request.params.repo)
     };
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+    Querystring: { ref?: string; path?: string };
+  }>("/:owner/:repo", async (request, reply) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    const index = await ensureRepoIndex(config, state);
+    const ref = queryString(request.query.ref) ?? state.defaultBranch;
+    const path = request.query.path ?? "";
+    const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
+    await reply.type("text/html; charset=utf-8").send(renderRepoPage({
+      repo: toRepoListItem(state),
+      index,
+      commits: await readCommits(repoPath, ref, 25),
+      tree: await readTree(repoPath, ref, path),
+      ref,
+      path
+    }));
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+    Querystring: { ref?: string; path?: string };
+  }>("/:owner/:repo/tree", async (request, reply) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    const index = await ensureRepoIndex(config, state);
+    const ref = queryString(request.query.ref) ?? state.defaultBranch;
+    const path = request.query.path ?? "";
+    const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
+    await reply.type("text/html; charset=utf-8").send(renderRepoPage({
+      repo: toRepoListItem(state),
+      index,
+      commits: await readCommits(repoPath, ref, 25),
+      tree: await readTree(repoPath, ref, path),
+      ref,
+      path
+    }));
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+    Querystring: { ref?: string; path?: string };
+  }>("/:owner/:repo/blob", async (request, reply) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    const index = await ensureRepoIndex(config, state);
+    const ref = queryString(request.query.ref) ?? state.defaultBranch;
+    const path = queryString(request.query.path);
+    if (!path) {
+      const error = new Error("File path is required") as Error & { statusCode: number };
+      error.statusCode = 400;
+      throw error;
+    }
+    const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
+    await reply.type("text/html; charset=utf-8").send(renderBlobPage({
+      repo: toRepoListItem(state),
+      index,
+      commits: await readCommits(repoPath, ref, 25),
+      ref,
+      file: await readBlob(repoPath, ref, path)
+    }));
   });
 
   app.all("/*", async (request, reply) => {

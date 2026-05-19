@@ -43,7 +43,12 @@ test("stores artifacts through the Walrus upload relay with 50 default epochs", 
   const bundleBytes = Buffer.from("git bundle bytes");
   await writeFile(sourcePath, bundleBytes);
 
-  let registerArgs: { epochs?: number; owner?: string; deletable?: boolean } | undefined;
+  let registerArgs: {
+    epochs?: number;
+    owner?: string;
+    deletable?: boolean;
+    attributes?: Record<string, string>;
+  } | undefined;
   let uploadedDigest: string | undefined;
   let walrusClientConfig: unknown;
 
@@ -78,7 +83,12 @@ test("stores artifacts through the Walrus upload relay with 50 default epochs", 
         expect(Buffer.from(input.blob)).toEqual(bundleBytes);
         return {
           encode: vi.fn(async () => undefined),
-          register: vi.fn((args: { epochs?: number; owner?: string; deletable?: boolean }) => {
+          register: vi.fn((args: {
+            epochs?: number;
+            owner?: string;
+            deletable?: boolean;
+            attributes?: Record<string, string>;
+          }) => {
             registerArgs = args;
             return { setGasPayment: vi.fn() };
           }),
@@ -88,7 +98,7 @@ test("stores artifacts through the Walrus upload relay with 50 default epochs", 
           certify: vi.fn(() => ({ setGasPayment: vi.fn() })),
           getBlob: vi.fn(async () => ({
             blobId: "blob-123",
-            blobObject: { id: "0xblob" }
+            blobObject: { id: `0x${"a".repeat(64)}` }
           }))
         };
       }
@@ -98,10 +108,16 @@ test("stores artifacts through the Walrus upload relay with 50 default epochs", 
 
   const { storeArtifact } = await import("../src/walrus.js");
   const keypair = Ed25519Keypair.generate();
+  const owner = Ed25519Keypair.generate().getPublicKey().toSuiAddress();
   const result = await storeArtifact({
     dataDir: workspace,
     sourcePath,
     artifactDigest: "digest-123",
+    metadata: {
+      octopus_repo_id: "ducnmm/demo",
+      octopus_artifact_digest: "digest-123"
+    },
+    walrusOwnerAddress: owner,
     walrusNetwork: "testnet",
     walrusUploadRelayUrl: "https://upload-relay.testnet.walrus.space",
     suiRpcUrl: "https://fullnode.testnet.sui.io:443",
@@ -111,7 +127,11 @@ test("stores artifacts through the Walrus upload relay with 50 default epochs", 
   expect(registerArgs).toMatchObject({
     epochs: 50,
     owner: keypair.getPublicKey().toSuiAddress(),
-    deletable: true
+    deletable: true,
+    attributes: {
+      octopus_repo_id: "ducnmm/demo",
+      octopus_artifact_digest: "digest-123"
+    }
   });
   expect(uploadedDigest).toMatch(/^tx-/);
   expect(walrusClientConfig).toMatchObject({
@@ -123,7 +143,9 @@ test("stores artifacts through the Walrus upload relay with 50 default epochs", 
   });
   expect(result).toMatchObject({
     blobId: "blob-123",
-    blobObjectId: "0xblob",
+    blobObjectId: `0x${"a".repeat(64)}`,
+    blobOwnerAddress: owner,
+    ownershipTransferred: true,
     storageDurationEpochs: 50,
     storageMode: "walrus-relay"
   });

@@ -100,8 +100,8 @@ export const loadConfig = (): ServerConfig => {
   const walrusNetwork = process.env.WALRUS_NETWORK ?? process.env.NETWORK ?? "testnet";
 
   return {
-    host: process.env.OCTOPUS_HOST ?? "127.0.0.1",
-    port: envInt(process.env.OCTOPUS_PORT, 48787),
+    host: process.env.OCTOPUS_HOST ?? (process.env.RAILWAY_ENVIRONMENT ? "0.0.0.0" : "127.0.0.1"),
+    port: envInt(process.env.OCTOPUS_PORT ?? process.env.PORT, 48787),
     dataDir,
     repoRoot: resolve(dataDir, "repos"),
     suiMode: process.env.OCTOPUS_SUI_MODE === "testnet" || process.env.SUI_NETWORK === "testnet" ? "testnet" : "local",
