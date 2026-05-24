@@ -147,6 +147,18 @@ const repositoryExists = async (repoRoot: string, owner: string, repo: string): 
   }
 };
 
+const sendGitAuthError = async (
+  reply: FastifyReply,
+  statusCode: 401 | 403,
+  message: string
+): Promise<void> => {
+  if (statusCode === 401) {
+    reply.header("WWW-Authenticate", 'Basic realm="Octopus"');
+  }
+
+  await reply.code(statusCode).type("text/plain").send(`${message}\n`);
+};
+
 export const handleGitHttp = async (
   request: FastifyRequest,
   reply: FastifyReply,
@@ -188,24 +200,24 @@ export const handleGitHttp = async (
     try {
       auth = await parseDelegateAuth(config, request);
     } catch (error) {
-      await reply.code(401).send({ error: error instanceof Error ? error.message : String(error) });
+      await sendGitAuthError(reply, 401, error instanceof Error ? error.message : String(error));
       return;
     }
 
     if (repoState && !canWriteRepo(repoState, auth)) {
-      await reply.code(403).send({ error: "Not authorized to push to this repository" });
+      await sendGitAuthError(reply, 403, "Not authorized to push to this repository");
       return;
     }
   } else if (repoState?.visibility === "private" && isUploadPackRequest) {
     try {
       auth = await parseDelegateAuth(config, request);
     } catch (error) {
-      await reply.code(401).send({ error: error instanceof Error ? error.message : String(error) });
+      await sendGitAuthError(reply, 401, error instanceof Error ? error.message : String(error));
       return;
     }
 
     if (!canReadRepo(repoState, auth)) {
-      await reply.code(403).send({ error: "Not authorized to read this repository" });
+      await sendGitAuthError(reply, 403, "Not authorized to read this repository");
       return;
     }
   }
@@ -216,11 +228,12 @@ export const handleGitHttp = async (
       await restoreRepository(config, repoRef.owner, repoRef.repo, auth);
       repoPath = await assertRepositoryExists(config.repoRoot, repoRef.owner, repoRef.repo);
     } catch (error) {
-      await reply.code(503).send({
-        error: `Repository cache is unavailable and automatic restore failed: ${
+      await reply
+        .code(503)
+        .type("text/plain")
+        .send(`Repository cache is unavailable and automatic restore failed: ${
           error instanceof Error ? error.message : String(error)
-        }`
-      });
+        }\n`);
       return;
     }
   }
@@ -271,6 +284,17 @@ export const handleGitHttp = async (
   if (isReceivePack && statusCode >= 200 && statusCode < 300 && beforeRefs) {
     const afterRefs = await listRefs(repoPath);
     const refDeletions = deletedRefs(beforeRefs, afterRefs);
+    if (config.suiMode === "testnet" && refDeletions.length > 0) {
+      for (const deletion of refDeletions) {
+        await runGit(["--git-dir", repoPath, "update-ref", deletion.refName, deletion.oldCommit]);
+      }
+      await reply
+        .code(403)
+        .type("text/plain")
+        .send("Deleting Git refs is not supported in Sui testnet mode yet\n");
+      return;
+    }
+
     try {
       const manifests = await createPushArtifacts({
         dataDir: config.dataDir,

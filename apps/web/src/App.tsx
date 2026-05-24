@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DAppKitProvider, useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { ConnectButton } from "@mysten/dapp-kit-react/ui";
 import { Transaction } from "@mysten/sui/transactions";
@@ -19,6 +19,12 @@ type LoginParams = {
   repoRegistryId: string;
   serverDelegatePublicKey: string;
   serverDelegateAddress: string;
+};
+
+type DelegateInput = {
+  publicKey: string;
+  delegateAddress: string;
+  label: string;
 };
 
 const queryParams = (): LoginParams => {
@@ -71,6 +77,43 @@ const resolveAccountId = async (accountRegistryId: string, ownerAddress: string)
   }
 };
 
+const desiredDelegates = (params: LoginParams): DelegateInput[] => {
+  const delegates = [{
+    publicKey: params.delegatePublicKey,
+    delegateAddress: params.delegateAddress,
+    label: "octopus-cli"
+  }];
+  if (
+    params.serverDelegatePublicKey &&
+    params.serverDelegateAddress &&
+    params.serverDelegateAddress !== params.delegateAddress
+  ) {
+    delegates.push({
+      publicKey: params.serverDelegatePublicKey,
+      delegateAddress: params.serverDelegateAddress,
+      label: "octopus-server"
+    });
+  }
+
+  return delegates;
+};
+
+const resolveRegisteredDelegates = async (accountId: string): Promise<Set<string>> => {
+  const accountObject = await suiClient.getObject({
+    id: accountId,
+    options: { showContent: true }
+  });
+  const fields = (accountObject.data?.content as {
+    fields?: { delegate_keys?: Array<{ fields?: { sui_address?: string } }> };
+  } | undefined)?.fields;
+
+  return new Set(
+    (fields?.delegate_keys ?? [])
+      .map((delegate) => delegate.fields?.sui_address)
+      .filter((address): address is string => Boolean(address))
+  );
+};
+
 const callbackCli = async (params: LoginParams, body: {
   walletAddress: string;
   accountId: string;
@@ -101,6 +144,9 @@ function LoginPanel() {
   const params = useMemo(queryParams, []);
   const [state, setState] = useState<LoginState>("idle");
   const [message, setMessage] = useState("");
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [pendingDelegates, setPendingDelegates] = useState<DelegateInput[] | null>(null);
+  const [isResolvingAccount, setIsResolvingAccount] = useState(false);
 
   const execute = useCallback(async (tx: Transaction): Promise<void> => {
     tx.setSender(account!.address);
@@ -111,6 +157,71 @@ function LoginPanel() {
       throw new Error("Wallet did not return a transaction result");
     }
   }, [account, kit]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadAccount = async (): Promise<void> => {
+      setAccountId(null);
+      setPendingDelegates(null);
+      if (!account?.address || !params.packageId || !params.accountRegistryId) {
+        return;
+      }
+
+      setIsResolvingAccount(true);
+      try {
+        const resolvedAccountId = await resolveAccountId(params.accountRegistryId, account.address);
+        if (!cancelled) {
+          setAccountId(resolvedAccountId);
+        }
+      } catch {
+        if (!cancelled) {
+          setAccountId(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsResolvingAccount(false);
+        }
+      }
+    };
+
+    void loadAccount();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [account?.address, params.accountRegistryId, params.packageId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadDelegates = async (): Promise<void> => {
+      setPendingDelegates(null);
+      if (!accountId || !params.packageId || !params.accountRegistryId) {
+        return;
+      }
+
+      setIsResolvingAccount(true);
+      try {
+        const registeredDelegates = await resolveRegisteredDelegates(accountId);
+        if (!cancelled) {
+          setPendingDelegates(
+            desiredDelegates(params).filter((delegate) => !registeredDelegates.has(delegate.delegateAddress))
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsResolvingAccount(false);
+        }
+      }
+    };
+
+    void loadDelegates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, params]);
 
   const createAccount = useCallback(async (): Promise<string> => {
     const tx = new Transaction();
@@ -124,6 +235,7 @@ function LoginPanel() {
       await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
       const accountId = await resolveAccountId(params.accountRegistryId, account!.address);
       if (accountId) {
+        setAccountId(accountId);
         return accountId;
       }
     }
@@ -131,42 +243,25 @@ function LoginPanel() {
     throw new Error("Created account, but could not resolve account object ID yet");
   }, [account, execute, params.accountRegistryId, params.packageId]);
 
-  const addDelegateKey = useCallback(async (
+  const addDelegateKeys = useCallback(async (
     accountId: string,
-    publicKey: string,
-    delegateAddress: string,
-    label: string
+    delegates: DelegateInput[]
   ): Promise<void> => {
     const tx = new Transaction();
-    tx.moveCall({
-      target: `${params.packageId}::account::add_delegate_key`,
-      arguments: [
-        tx.object(accountId),
-        tx.object(params.accountRegistryId),
-        tx.pure.vector("u8", hexToBytes(publicKey)),
-        tx.pure.address(delegateAddress),
-        tx.pure.string(label)
-      ]
-    });
+    for (const delegate of delegates) {
+      tx.moveCall({
+        target: `${params.packageId}::account::add_delegate_key`,
+        arguments: [
+          tx.object(accountId),
+          tx.object(params.accountRegistryId),
+          tx.pure.vector("u8", hexToBytes(delegate.publicKey)),
+          tx.pure.address(delegate.delegateAddress),
+          tx.pure.string(delegate.label)
+        ]
+      });
+    }
     await execute(tx);
   }, [execute, params.accountRegistryId, params.packageId]);
-
-  const addDelegateKeyIfNeeded = useCallback(async (
-    accountId: string,
-    publicKey: string,
-    delegateAddress: string,
-    label: string
-  ): Promise<void> => {
-    try {
-      await addDelegateKey(accountId, publicKey, delegateAddress, label);
-    } catch (error) {
-      const text = error instanceof Error ? error.message : String(error);
-      if (text.includes("EDelegateKeyAlreadyExists") || text.includes("101")) {
-        return;
-      }
-      throw error;
-    }
-  }, [addDelegateKey]);
 
   const approve = useCallback(async () => {
     if (!account?.address) {
@@ -184,28 +279,21 @@ function LoginPanel() {
     setMessage("Authorizing delegate key...");
 
     try {
-      let accountId: string | null = null;
+      let authorizedAccountId: string | null = null;
       if (params.packageId && params.accountRegistryId) {
-        accountId = await resolveAccountId(params.accountRegistryId, account.address);
-        if (!accountId) {
+        authorizedAccountId = accountId;
+        if (!authorizedAccountId) {
           setMessage("Creating Octopus account...");
-          accountId = await createAccount();
+          authorizedAccountId = await createAccount();
+          setState("idle");
+          setMessage("Account created. Click Authorize again to register delegate keys.");
+          return;
         }
 
-        setMessage("Registering delegate key on Sui...");
-        await addDelegateKeyIfNeeded(accountId, params.delegatePublicKey, params.delegateAddress, "octopus-cli");
-        if (
-          params.serverDelegatePublicKey &&
-          params.serverDelegateAddress &&
-          params.serverDelegateAddress !== params.delegateAddress
-        ) {
-          setMessage("Registering server relay delegate on Sui...");
-          await addDelegateKeyIfNeeded(
-            accountId,
-            params.serverDelegatePublicKey,
-            params.serverDelegateAddress,
-            "octopus-server"
-          );
+        const delegates = pendingDelegates ?? desiredDelegates(params);
+        if (delegates.length > 0) {
+          setMessage("Registering delegate keys on Sui...");
+          await addDelegateKeys(authorizedAccountId, delegates);
         }
       } else {
         const response = await fetch(new URL("/v1/auth/delegate", params.server).toString(), {
@@ -221,11 +309,11 @@ function LoginPanel() {
         if (!response.ok || !body.accountId) {
           throw new Error(body.error ?? "Local delegate registration failed");
         }
-        accountId = body.accountId;
+        authorizedAccountId = body.accountId;
       }
 
       setMessage("Saving CLI credentials...");
-      await callbackCli(params, { walletAddress: account.address, accountId });
+      await callbackCli(params, { walletAddress: account.address, accountId: authorizedAccountId });
       setState("success");
       setMessage("Login complete. You can return to the terminal.");
     } catch (error) {
@@ -233,7 +321,7 @@ function LoginPanel() {
       setState("error");
       setMessage(text);
     }
-  }, [account, addDelegateKeyIfNeeded, createAccount, params]);
+  }, [account, accountId, addDelegateKeys, createAccount, params, pendingDelegates]);
 
   return (
     <main className="shell">
@@ -262,7 +350,7 @@ function LoginPanel() {
         </div>
         <div className="actions">
           <ConnectButton />
-          <button disabled={!account?.address || state === "working"} onClick={() => void approve()}>
+          <button disabled={!account?.address || isResolvingAccount || state === "working"} onClick={() => void approve()}>
             {state === "working" ? "Authorizing" : "Authorize"}
           </button>
         </div>

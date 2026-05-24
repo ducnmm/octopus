@@ -148,6 +148,14 @@ const normalizeBaseUrl = (url: string): string => {
   return url.replace(/\/+$/, "");
 };
 
+const credentialUrlParts = (serverUrl: string): { protocol: string; host: string } => {
+  const url = new URL(serverUrl);
+  return {
+    protocol: url.protocol.replace(/:$/, ""),
+    host: url.port ? `${url.hostname}:${url.port}` : url.hostname
+  };
+};
+
 const safeEqual = (left: string, right: string): boolean => {
   const leftBuffer = Buffer.from(left, "utf8");
   const rightBuffer = Buffer.from(right, "utf8");
@@ -187,11 +195,17 @@ const fetchAuthServerConfig = async (
   }
 };
 
-const runGit = async (args: string[], cwd?: string): Promise<string> => {
+const runGit = async (
+  args: string[],
+  cwd?: string,
+  input?: string,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<string> => {
   return await new Promise((resolvePromise, reject) => {
     const child = spawn("git", args, {
       cwd,
-      stdio: ["ignore", "pipe", "pipe"]
+      env,
+      stdio: ["pipe", "pipe", "pipe"]
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -207,6 +221,8 @@ const runGit = async (args: string[], cwd?: string): Promise<string> => {
 
       reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `git ${args.join(" ")} failed`));
     });
+
+    child.stdin.end(input);
   });
 };
 
@@ -245,8 +261,7 @@ const configureAuthHeader = async (
 const configureRemote = async (
   cwd: string | undefined,
   remoteName: string,
-  remoteUrl: string,
-  credentials: OctopusCredentials
+  remoteUrl: string
 ): Promise<void> => {
   try {
     await runGit(["remote", "get-url", remoteName], cwd);
@@ -255,7 +270,52 @@ const configureRemote = async (
     await runGit(["remote", "add", remoteName, remoteUrl], cwd);
   }
 
-  await configureAuthHeader(cwd, remoteUrl, credentials);
+};
+
+const gitCredentialInput = (serverUrl: string, password?: string): string => {
+  const { protocol, host } = credentialUrlParts(serverUrl);
+  return [
+    `protocol=${protocol}`,
+    `host=${host}`,
+    "username=octopus",
+    ...(password ? [`password=${password}`] : []),
+    ""
+  ].join("\n");
+};
+
+const approveGitCredential = async (
+  credentials: OctopusCredentials,
+  cwd: string | undefined
+): Promise<void> => {
+  await runGit(
+    ["credential", "approve"],
+    cwd,
+    gitCredentialInput(
+      credentials.serverUrl,
+      await createDelegateAuthToken({
+        credentials,
+        scope: "git",
+        expiresInMs: GIT_AUTH_EXPIRES_IN_MS
+      })
+    )
+  );
+};
+
+const rejectGitCredential = async (
+  serverUrl: string,
+  cwd: string | undefined
+): Promise<void> => {
+  await runGit(["credential", "reject"], cwd, gitCredentialInput(serverUrl));
+};
+
+const fillGitCredential = async (
+  serverUrl: string,
+  cwd: string | undefined
+): Promise<string> => {
+  return await runGit(["credential", "fill"], cwd, gitCredentialInput(serverUrl), {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0"
+  });
 };
 
 const startLoginCallbackServer = async (input: {
@@ -295,7 +355,8 @@ const startLoginCallbackServer = async (input: {
           : Object.fromEntries(url.searchParams.entries());
       const callbackState = typeof body.state === "string" ? body.state : "";
       if (!safeEqual(callbackState, input.state)) {
-        throw new Error("Invalid login callback state");
+        sendJson(response, 400, { error: "Invalid login callback state" });
+        return;
       }
 
       const callback = authCallbackRequestSchema.parse({
@@ -436,9 +497,11 @@ export const createProgram = (context: CliContext): Command => {
       try {
         const credentials = await callback.credentials;
         const path = await writeCredentials(credentials, context.home);
+        await approveGitCredential(credentials, context.cwd);
         writeLine(context.stdout, `Logged in as ${credentials.walletAddress}`);
         writeLine(context.stdout, `Delegate: ${credentials.delegateAddress}`);
         writeLine(context.stdout, `Credentials: ${path}`);
+        writeLine(context.stdout, `Git credential: stored for ${credentials.serverUrl}`);
       } finally {
         await callback.close();
       }
@@ -461,8 +524,17 @@ export const createProgram = (context: CliContext): Command => {
 
   authCommand
     .command("logout")
-    .description("Remove saved local credentials")
+    .description("Remove saved local credentials and Git credential")
     .action(async () => {
+      const credentials = await readCredentials(context.home);
+      if (credentials) {
+        try {
+          await rejectGitCredential(credentials.serverUrl, context.cwd);
+          writeLine(context.stdout, `Git credential removed for ${credentials.serverUrl}`);
+        } catch (error) {
+          writeLine(context.stdout, `warn could not remove Git credential: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       const removed = await deleteCredentials(context.home);
       writeLine(context.stdout, removed ? "Logged out" : "No credentials found");
     });
@@ -500,6 +572,8 @@ export const createProgram = (context: CliContext): Command => {
       const remote = new URL(repo.gitRemotePath, options.server).toString();
       writeLine(context.stdout, `Created ${repo.owner}/${repo.name} (${repo.visibility})`);
       writeLine(context.stdout, `Remote: ${remote}`);
+      writeLine(context.stdout, `Next: git remote add origin ${remote}`);
+      writeLine(context.stdout, `Next: git push origin main`);
     });
 
   repoCommand
@@ -507,16 +581,11 @@ export const createProgram = (context: CliContext): Command => {
     .argument("<repo>", "repository in owner/name form")
     .option("--remote <name>", "Git remote name", "origin")
     .option("--server <url>", "Octopus server URL", baseUrl)
-    .description("Configure a Git remote and repo-local delegate key headers")
+    .description("Configure a Git remote")
     .action(async (repo: string, options: RepoConnectOptions) => {
-      const credentials = await readCredentials(context.home);
-      if (!credentials) {
-        throw new Error(`Not logged in. Run ocp auth login first.`);
-      }
-
       const { owner, name } = splitRepo(repo);
       const remoteUrl = new URL(`/${owner}/${name}.git`, normalizeBaseUrl(options.server)).toString();
-      await configureRemote(context.cwd, options.remote, remoteUrl, credentials);
+      await configureRemote(context.cwd, options.remote, remoteUrl);
       writeLine(context.stdout, `Connected ${repo}`);
       writeLine(context.stdout, `  remote: ${options.remote}`);
       writeLine(context.stdout, `  url:    ${remoteUrl}`);
@@ -673,21 +742,42 @@ export const createProgram = (context: CliContext): Command => {
       }
 
       try {
+        const credential = await fillGitCredential(serverUrl, context.cwd);
+        if (credential.includes("password=")) {
+          writeLine(context.stdout, `ok   git credential: configured for ${serverUrl}`);
+        } else {
+          warnings.push(`git credential for ${serverUrl} did not include a password`);
+        }
+      } catch {
+        warnings.push(`git credential is not configured for ${serverUrl}`);
+      }
+
+      try {
         const remoteUrl = await currentGitRemoteUrl(context.cwd, options.remote);
         writeLine(context.stdout, `ok   git remote ${options.remote}: ${remoteUrl}`);
-        const header = await runGit([
+        const remoteHost = new URL(remoteUrl).host;
+        const serverHost = new URL(serverUrl).host;
+        if (remoteHost !== serverHost) {
+          warnings.push(`git remote ${options.remote} points to ${remoteHost}, but doctor checked ${serverHost}`);
+        }
+
+        try {
+          const header = await runGit([
           "config",
           "--local",
           "--get-all",
           `http.${remoteUrl}.extraHeader`
-        ], context.cwd);
-        if (header.includes(delegateAuthHeaders.token)) {
-          writeLine(context.stdout, `ok   git auth header: configured for ${options.remote}`);
-        } else {
-          warnings.push(`git auth header for ${options.remote} does not include ${delegateAuthHeaders.token}`);
+          ], context.cwd);
+          if (header.includes(delegateAuthHeaders.token)) {
+            writeLine(context.stdout, `ok   git auth header: configured for ${options.remote}`);
+          } else {
+            warnings.push(`git auth header for ${options.remote} does not include ${delegateAuthHeaders.token}`);
+          }
+        } catch {
+          warnings.push(`git auth header is not configured for ${options.remote}; Git credential helper will be used`);
         }
       } catch {
-        warnings.push(`git remote ${options.remote} or its Octopus auth header is not configured in this directory`);
+        warnings.push(`git remote ${options.remote} is not configured in this directory`);
       }
 
       for (const warning of warnings) {

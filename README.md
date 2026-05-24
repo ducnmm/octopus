@@ -57,6 +57,11 @@ pnpm ocp repo connect ducnmm/demo --remote origin --server http://127.0.0.1:4878
 git push origin main
 ```
 
+`ocp auth login` stores both Octopus credentials and a normal Git HTTPS
+credential for the server. Git commands use the credential helper by default.
+`ocp repo sync-auth` remains available for older repo-local `http.extraHeader`
+setups.
+
 In testnet mode the server exposes the deployed package and registry IDs from
 `/v1/auth/config`, so login opens the on-chain wallet approval flow and registers
 the CLI/server delegate keys before credentials are saved.
@@ -142,8 +147,12 @@ git clone http://127.0.0.1:48787/ducnmm/demo.git restored-demo
 
 Expected result: the restored clone has the same Git commit hash as the original repository.
 
+Branch and tag deletion is supported in local registry mode. In Sui testnet
+mode, delete-ref pushes are rejected until the Move registry exposes a live
+delete-ref transaction.
+
 ## Current Status
 
-- Implemented: local Git HTTP push/clone, delegate-key CLI auth, repo-local Git `http.extraHeader` setup, authenticated push authorization, bare repo cache, snapshot bundle artifacts, SHA-256 manifests, local Sui registry mirror, restore from Sui-shaped manifests, Walrus CLI upload mode, Walrus upload relay mode with blob attributes and owner transfer, Walrus Aggregator download mode, local private artifact encryption, feature-flagged SEAL private artifact encryption, local file/commit indexing, repository file browser, file viewer, commit list, JSON index surfaces, and a Vite wallet login page.
+- Implemented: local Git HTTP push/clone, delegate-key CLI auth, Git credential-helper auth, repo-local Git `http.extraHeader` compatibility, authenticated push authorization, bare repo cache, snapshot bundle artifacts, SHA-256 manifests, local Sui registry mirror, restore from Sui-shaped manifests, Walrus CLI upload mode, Walrus upload relay mode with blob attributes and owner transfer, Walrus Aggregator download mode, local private artifact encryption, feature-flagged SEAL private artifact encryption, local file/commit indexing, repository file browser, file viewer, commit list, JSON index surfaces, and a Vite wallet login page.
 - Scaffolded: Sui testnet adapter for delegate verification, `create_repo`, `push_ref`, and `seal_approve`; Postgres schema migration for accounts/repos/manifests/artifacts/push attempts; Sui Move package with account, delegate, private read allow list, and delegate-authorized `push_ref`.
 - Not yet implemented: hosted production indexer worker, code search, pull request review surfaces, issue tracker, CI, and organization/team permission model.

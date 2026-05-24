@@ -20,3 +20,6 @@ Then:
 - Octopus rebuilds the local bare repo cache
 - `git clone http://127.0.0.1:48787/ducnmm/demo.git restored-demo` succeeds
 - the restored repo commit hash equals the original pushed commit hash
+
+The same restore path should also run automatically when a normal `git clone`
+or `git fetch` arrives and the local bare repo cache is missing.

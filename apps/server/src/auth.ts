@@ -91,7 +91,7 @@ const identityFromAuthToken = async (request: FastifyRequest): Promise<{
   identity: DelegateIdentity;
   cacheKey: string;
 }> => {
-  const tokenHeader = headerValue(request, delegateAuthHeaders.token);
+  const tokenHeader = authTokenFromRequest(request);
   if (!tokenHeader) {
     throw new Error("Missing Octopus auth token");
   }
@@ -152,6 +152,36 @@ const headerValue = (request: FastifyRequest, name: string): string | null => {
   }
 
   return value ?? null;
+};
+
+const authTokenFromBasicAuth = (authorization: string | null): string | null => {
+  if (!authorization) {
+    return null;
+  }
+
+  const [scheme, encoded, extra] = authorization.split(/\s+/);
+  if (extra || scheme?.toLowerCase() !== "basic" || !encoded) {
+    return null;
+  }
+
+  try {
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+    const separator = decoded.indexOf(":");
+    if (separator < 0) {
+      return null;
+    }
+
+    return decoded.slice(separator + 1) || null;
+  } catch {
+    return null;
+  }
+};
+
+const authTokenFromRequest = (request: FastifyRequest): string | null => {
+  return (
+    headerValue(request, delegateAuthHeaders.token) ??
+    authTokenFromBasicAuth(headerValue(request, "authorization"))
+  );
 };
 
 const localAccountId = (walletAddress: string): string => {
@@ -308,7 +338,7 @@ export const parseDelegateAuth = async (
   let identity: DelegateIdentity;
   let cacheKey: string;
 
-  if (headerValue(request, delegateAuthHeaders.token)) {
+  if (authTokenFromRequest(request)) {
     const tokenAuth = await identityFromAuthToken(request);
     accountId = tokenAuth.accountId;
     identity = tokenAuth.identity;

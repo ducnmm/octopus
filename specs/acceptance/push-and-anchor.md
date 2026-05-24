@@ -4,6 +4,7 @@
 
 Given a public repo exists
 And a user has write permission
+And `ocp auth login` has stored a Git HTTPS credential
 When they run:
 
 ```bash

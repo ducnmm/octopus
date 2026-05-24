@@ -13,13 +13,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
-  /v1/auth/session:
-    post:
-      summary: Complete CLI login callback
+  /v1/auth/config:
+    get:
+      summary: Read server auth and Sui configuration for ocp login
       responses:
         "200":
-          description: Login completed
+          description: Auth configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthConfig"
+  /v1/auth/delegate:
+    post:
+      summary: Register a local-mode delegate key
+      responses:
+        "201":
+          description: Delegate registered
   /v1/repos:
+    get:
+      summary: List repositories visible to the caller
+      responses:
+        "200":
+          description: Repository list
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - repos
+                properties:
+                  repos:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RepoListItem"
     post:
       summary: Create a repository
       requestBody:
@@ -84,7 +110,69 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/PackManifest"
+  /v1/repos/{owner}/{repo}/index:
+    get:
+      summary: Read or build the repository index
+      parameters:
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
+      responses:
+        "200":
+          description: Repository index
+    post:
+      summary: Force a repository reindex
+      parameters:
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
+      responses:
+        "202":
+          description: Repository reindexed
+  /v1/repos/{owner}/{repo}/commits:
+    get:
+      summary: List commits for a ref
+      parameters:
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
+      responses:
+        "200":
+          description: Commit list
+  /v1/repos/{owner}/{repo}/tree:
+    get:
+      summary: List tree entries for a ref and path
+      parameters:
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
+      responses:
+        "200":
+          description: Tree entries
+  /v1/repos/{owner}/{repo}/blob:
+    get:
+      summary: Read a file blob for a ref and path
+      parameters:
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File blob
 components:
+  parameters:
+    Owner:
+      name: owner
+      in: path
+      required: true
+      schema:
+        type: string
+    Repo:
+      name: repo
+      in: path
+      required: true
+      schema:
+        type: string
   schemas:
     HealthResponse:
       type: object
@@ -95,6 +183,32 @@ components:
         ok:
           type: boolean
         service:
+          type: string
+    AuthConfig:
+      type: object
+      required:
+        - suiMode
+        - suiNetwork
+        - suiRpcUrl
+      properties:
+        suiMode:
+          type: string
+          enum:
+            - local
+            - testnet
+        suiNetwork:
+          type: string
+        suiRpcUrl:
+          type: string
+        packageId:
+          type: string
+        accountRegistryId:
+          type: string
+        repoRegistryId:
+          type: string
+        serverDelegatePublicKey:
+          type: string
+        serverDelegateAddress:
           type: string
     CreateRepoRequest:
       type: object
@@ -137,9 +251,27 @@ components:
           type: string
           enum:
             - local
+            - testnet
         repoObjectId:
           type: string
           description: Local registry mode uses local:{sha256-prefix}; live Sui will use an object ID.
+    RepoListItem:
+      allOf:
+        - $ref: "#/components/schemas/RepoSummary"
+        - type: object
+          properties:
+            repoId:
+              type: string
+            defaultBranchCommit:
+              type:
+                - string
+                - "null"
+            refCount:
+              type: integer
+            manifestCount:
+              type: integer
+            updatedAtMs:
+              type: integer
     PackManifest:
       type: object
       required:
@@ -233,9 +365,10 @@ components:
           enum:
             - local
             - walrus-cli
-            - walrus-aggregator
+            - walrus-relay
         manifestSource:
           type: string
           enum:
             - sui-local
+            - sui-testnet
             - artifact-fallback

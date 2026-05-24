@@ -16,4 +16,4 @@ Then:
 - the user approves the delegate key with their wallet
 - the delegate key is registered on Sui
 - credentials are written to `~/.octopus/credentials.json`
-
+- a Git HTTPS credential is stored for the Octopus server

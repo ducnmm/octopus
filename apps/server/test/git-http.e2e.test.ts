@@ -37,6 +37,18 @@ const git = async (args: string[], cwd?: string): Promise<string> => {
   return stdout.trim();
 };
 
+const storeGitCredential = async (
+  repoDir: string,
+  remoteUrl: string,
+  token: string
+): Promise<void> => {
+  const storePath = join(repoDir, ".git", "octopus-credentials");
+  const url = new URL(remoteUrl);
+  const credentialUrl = `${url.protocol}//octopus:${encodeURIComponent(token)}@${url.host}`;
+  await writeFile(storePath, `${credentialUrl}\n`, { mode: 0o600 });
+  await git(["config", "--local", "credential.helper", `store --file=${storePath}`], repoDir);
+};
+
 const signedDelegateHeaders = async (scope: "rest" | "git"): Promise<Record<string, string>> => {
   const nowMs = Date.now();
   const payload = {
@@ -181,13 +193,7 @@ test("serves normal git push and clone through smart HTTP", async () => {
   await git(["commit", "-m", "initial commit"], sourceRepo);
   await git(["branch", "-M", "main"], sourceRepo);
   await git(["remote", "add", "origin", `${baseUrl}/ducnmm/demo.git`], sourceRepo);
-  await git([
-    "config",
-    "--local",
-    "--add",
-    `http.${baseUrl}/ducnmm/demo.git.extraHeader`,
-    `${delegateAuthHeaders.token}: ${gitAuthHeaders[delegateAuthHeaders.token]}`
-  ], sourceRepo);
+  await storeGitCredential(sourceRepo, `${baseUrl}/ducnmm/demo.git`, gitAuthHeaders[delegateAuthHeaders.token]!);
   await git(["push", "origin", "main"], sourceRepo);
 
   await git(["clone", `${baseUrl}/ducnmm/demo.git`, cloneRepo]);
@@ -433,6 +439,48 @@ test("supports common branch and tag ref workflows through smart HTTP", async ()
   expect(state?.refs["refs/tags/v1"]).toBeUndefined();
 });
 
+test("unauthorized push does not create manifests or mutate ref state", async () => {
+  await registerDelegate();
+  const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...delegateHeaders()
+    },
+    body: JSON.stringify({
+      owner: "ducnmm",
+      name: "unauthorized-demo",
+      visibility: "public"
+    })
+  });
+  expect(createResponse.status).toBe(201);
+
+  const sourceRepo = join(workspace, "unauthorized-source");
+  const remoteUrl = `${baseUrl}/ducnmm/unauthorized-demo.git`;
+  await git(["init", sourceRepo]);
+  await git(["config", "user.email", "test@octopus.local"], sourceRepo);
+  await git(["config", "user.name", "Octopus Test"], sourceRepo);
+  await writeFile(join(sourceRepo, "README.md"), "unauthorized\n");
+  await git(["add", "README.md"], sourceRepo);
+  await git(["commit", "-m", "unauthorized commit"], sourceRepo);
+  await git(["branch", "-M", "main"], sourceRepo);
+  await git(["remote", "add", "origin", remoteUrl], sourceRepo);
+
+  await expect(
+    execFileAsync("git", ["push", "origin", "main"], {
+      cwd: sourceRepo,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0"
+      }
+    })
+  ).rejects.toBeTruthy();
+
+  const state = await readSuiRepoState(config, "ducnmm", "unauthorized-demo");
+  expect(state?.refs).toEqual({});
+  expect(state?.manifests).toEqual([]);
+});
+
 test("requires delegate headers for push and private fetch", async () => {
   await registerDelegate();
   const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
@@ -470,15 +518,18 @@ test("requires delegate headers for push and private fetch", async () => {
     new URL("/ducnmm/private-demo.git/info/refs?service=git-receive-pack", baseUrl)
   );
   expect(pushAdvertisement.status).toBe(401);
+  expect(pushAdvertisement.headers.get("www-authenticate")).toBe('Basic realm="Octopus"');
 
   const privateFetchAdvertisement = await fetch(
     new URL("/ducnmm/private-demo.git/info/refs?service=git-upload-pack", baseUrl)
   );
   expect(privateFetchAdvertisement.status).toBe(401);
+  expect(privateFetchAdvertisement.headers.get("www-authenticate")).toBe('Basic realm="Octopus"');
 
+  const basicAuthToken = Buffer.from(`octopus:${gitAuthHeaders[delegateAuthHeaders.token]}`, "utf8").toString("base64");
   const authorizedFetchAdvertisement = await fetch(
     new URL("/ducnmm/private-demo.git/info/refs?service=git-upload-pack", baseUrl),
-    { headers: gitAuthHeaders }
+    { headers: { authorization: `Basic ${basicAuthToken}` } }
   );
   expect(authorizedFetchAdvertisement.status).toBe(200);
 });
@@ -536,6 +587,8 @@ test("encrypts private push artifacts and requires auth for restore", async () =
 
   const sourceRepo = join(workspace, "private-source");
   const restoredCloneRepo = join(workspace, "private-restored-clone");
+  const gitConfigGlobal = join(workspace, "private-clone-gitconfig");
+  const gitCredentialStore = join(workspace, "private-clone-credentials");
   const remoteUrl = `${baseUrl}/ducnmm/sealed-demo.git`;
   await git(["init", sourceRepo]);
   await git(["config", "user.email", "test@octopus.local"], sourceRepo);
@@ -588,13 +641,24 @@ test("encrypts private push artifacts and requires auth for restore", async () =
   });
   expect(restoreResponse.status).toBe(200);
 
-  await git([
-    "-c",
-    `http.${remoteUrl}.extraHeader=${delegateAuthHeaders.token}: ${gitAuthHeaders[delegateAuthHeaders.token]}`,
-    "clone",
-    remoteUrl,
-    restoredCloneRepo
-  ]);
+  const remote = new URL(remoteUrl);
+  await writeFile(gitConfigGlobal, `[credential]\n\thelper = store --file=${gitCredentialStore}\n`);
+  await writeFile(
+    gitCredentialStore,
+    `${remote.protocol}//octopus:${encodeURIComponent(gitAuthHeaders[delegateAuthHeaders.token]!)}@${remote.host}\n`,
+    { mode: 0o600 }
+  );
+  const previousGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_GLOBAL = gitConfigGlobal;
+  try {
+    await git(["clone", remoteUrl, restoredCloneRepo]);
+  } finally {
+    if (previousGitConfigGlobal === undefined) {
+      delete process.env.GIT_CONFIG_GLOBAL;
+    } else {
+      process.env.GIT_CONFIG_GLOBAL = previousGitConfigGlobal;
+    }
+  }
   const pushedCommit = await git(["rev-parse", "HEAD"], sourceRepo);
   const restoredClonedCommit = await git(["rev-parse", "HEAD"], restoredCloneRepo);
   expect(restoredClonedCommit).toBe(pushedCommit);

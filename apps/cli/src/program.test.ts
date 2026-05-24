@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -103,6 +103,8 @@ test("repo create sends a public visibility payload by default", async () => {
     visibility: "public"
   });
   expect(stdout.output()).toContain("Created ducnmm/demo (public)");
+  expect(stdout.output()).toContain("Next: git remote add origin http://127.0.0.1:48787/ducnmm/demo.git");
+  expect(stdout.output()).toContain("Next: git push origin main");
 });
 
 test("repo create supports explicit private visibility", async () => {
@@ -192,6 +194,12 @@ test("repo restore calls the restore endpoint and prints the result", async () =
 
 test("auth login accepts the wallet callback and writes credentials", async () => {
   const home = await mkdtemp(join(tmpdir(), "octopus-cli-home-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "octopus-cli-bin-"));
+  const credentialLog = join(home, "git-credentials.log");
+  await writeFile(join(fakeBin, "git"), `#!/bin/sh\nprintf 'args=%s\\n' "$*" >> "${credentialLog}"\ncat >> "${credentialLog}"\nprintf '\\n--END--\\n' >> "${credentialLog}"\nexit 0\n`);
+  await chmod(join(fakeBin, "git"), 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
   const { context, stdout } = createContext();
   context.home = home;
 
@@ -214,6 +222,16 @@ test("auth login accepts the wallet callback and writes credentials", async () =
   const [, openUrl] = await waitForMatch(stdout.output, /Open: (http:\/\/web\.test\/login\?\S+)/);
   const state = new URL(openUrl!).searchParams.get("state");
   expect(state).toMatch(/^[0-9a-f]{32}$/);
+  const staleResponse = await fetch(callbackUrl!, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      walletAddress: "0xstale",
+      accountId: "local:stale",
+      state: "stale"
+    })
+  });
+  expect(staleResponse.status).toBe(400);
   await fetch(callbackUrl!, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -226,7 +244,11 @@ test("auth login accepts the wallet callback and writes credentials", async () =
       repoRegistryId: "0xrepo-registry"
     })
   });
-  await run;
+  try {
+    await run;
+  } finally {
+    process.env.PATH = originalPath;
+  }
 
   const credentials = await readCredentials(home);
   expect(credentials).toMatchObject({
@@ -238,10 +260,18 @@ test("auth login accepts the wallet callback and writes credentials", async () =
   });
   expect(credentials?.delegatePrivateKey).toBeTruthy();
   expect(stdout.output()).toContain(`Credentials: ${home}/.octopus/credentials.json`);
+  expect(stdout.output()).toContain("Git credential: stored for http://server.test");
+  const credential = await readFile(credentialLog, "utf8");
+  expect(credential).toContain("args=credential approve");
+  expect(credential).toContain("protocol=http");
+  expect(credential).toContain("host=server.test");
+  expect(credential).toContain("username=octopus");
+  expect(credential).toContain("password=");
   await rm(home, { recursive: true, force: true });
+  await rm(fakeBin, { recursive: true, force: true });
 });
 
-test("repo connect writes remote URL and signed delegate token header", async () => {
+test("repo connect writes remote URL and sync-auth refreshes signed delegate token header", async () => {
   const home = await mkdtemp(join(tmpdir(), "octopus-cli-home-"));
   const repoDir = await mkdtemp(join(tmpdir(), "octopus-cli-repo-"));
   const identity = generateDelegateIdentity();
@@ -271,9 +301,46 @@ test("repo connect writes remote URL and signed delegate token header", async ()
   expect(headers.stdout).not.toContain(identity.delegatePrivateKey);
   expect(headers.stdout.trim().split(/\r?\n/)).toHaveLength(1);
   expect(stdout.output()).toContain("Connected ducnmm/demo");
+  expect(stdout.output()).toContain("Next: git push origin main");
   expect(stdout.output()).toContain("Refreshed auth for ducnmm/demo");
   await rm(home, { recursive: true, force: true });
   await rm(repoDir, { recursive: true, force: true });
+});
+
+test("auth logout removes saved credentials and rejects Git credential", async () => {
+  const home = await mkdtemp(join(tmpdir(), "octopus-cli-home-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "octopus-cli-bin-"));
+  const credentialLog = join(home, "git-credentials.log");
+  const identity = generateDelegateIdentity();
+  await writeCredentials({
+    ...identity,
+    walletAddress: "0xabc",
+    accountId: "local:abc",
+    serverUrl: "https://octopus.test",
+    webUrl: "https://octopus.test"
+  }, home);
+  await writeFile(join(fakeBin, "git"), `#!/bin/sh\nprintf 'args=%s\\n' "$*" >> "${credentialLog}"\ncat >> "${credentialLog}"\nprintf '\\n--END--\\n' >> "${credentialLog}"\nexit 0\n`);
+  await chmod(join(fakeBin, "git"), 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
+  const { context, stdout } = createContext();
+  context.home = home;
+
+  try {
+    await runCli(["auth", "logout"], context);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+
+  expect(await readCredentials(home)).toBeNull();
+  const credential = await readFile(credentialLog, "utf8");
+  expect(credential).toContain("args=credential reject");
+  expect(credential).toContain("protocol=https");
+  expect(credential).toContain("host=octopus.test");
+  expect(stdout.output()).toContain("Git credential removed for https://octopus.test");
+  expect(stdout.output()).toContain("Logged out");
+  await rm(home, { recursive: true, force: true });
+  await rm(fakeBin, { recursive: true, force: true });
 });
 
 test("doctor reports unreachable server and missing credentials", async () => {
@@ -290,4 +357,37 @@ test("doctor reports unreachable server and missing credentials", async () => {
   expect(stdout.output()).toContain("warn credentials not found");
   expect(stderr.output()).toContain("fail server is unreachable at http://octopus.test");
   await rm(home, { recursive: true, force: true });
+});
+
+test("doctor reports Git credential and remote/server mismatch", async () => {
+  const home = await mkdtemp(join(tmpdir(), "octopus-cli-home-"));
+  const repoDir = await mkdtemp(join(tmpdir(), "octopus-cli-repo-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "octopus-cli-bin-"));
+  await execFileAsync("git", ["init"], { cwd: repoDir });
+  await execFileAsync("git", ["remote", "add", "origin", "http://other.test/ducnmm/demo.git"], { cwd: repoDir });
+  await writeFile(join(fakeBin, "git"), `#!/bin/sh\nif [ "$1 $2" = "credential fill" ]; then\n  cat >/dev/null\n  printf 'protocol=http\\nhost=octopus.test\\nusername=octopus\\npassword=token\\n\\n'\n  exit 0\nfi\nexec /usr/bin/git "$@"\n`);
+  await chmod(join(fakeBin, "git"), 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
+  const fetchImpl = vi.fn(async (url: URL | RequestInfo) => {
+    if (String(url).endsWith("/healthz")) {
+      return okJson({ ok: true, service: "octopus-server" });
+    }
+    return okJson({ suiMode: "local", suiNetwork: "localnet", suiRpcUrl: "http://127.0.0.1:9000" });
+  }) as unknown as OctopusFetch;
+  const { context, stdout } = createContext(fetchImpl);
+  context.home = home;
+  context.cwd = repoDir;
+
+  try {
+    await runCli(["doctor", "--server", "http://octopus.test"], context);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+
+  expect(stdout.output()).toContain("ok   git credential: configured for http://octopus.test");
+  expect(stdout.output()).toContain("warn git remote origin points to other.test, but doctor checked octopus.test");
+  await rm(home, { recursive: true, force: true });
+  await rm(repoDir, { recursive: true, force: true });
+  await rm(fakeBin, { recursive: true, force: true });
 });

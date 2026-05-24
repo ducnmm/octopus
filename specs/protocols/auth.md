@@ -10,13 +10,18 @@ ocp auth login
 
 The CLI generates a local delegate key and asks the user to approve it through a Sui wallet. In testnet mode, the wallet creates an `OctopusAccount` if needed and registers both the CLI delegate key and the configured server relay delegate key on-chain.
 
-## Delegate Git/API Headers
+## Delegate Git/API Auth
 
-Headers:
+REST API requests use:
 
 ```text
 x-octopus-auth-token
 ```
+
+Git HTTPS requests use standard Basic auth by default. The username is
+`octopus`; the password is the signed delegate auth token with `scope=git`.
+Servers also continue to accept `x-octopus-auth-token` on Git requests for
+repo-local `http.extraHeader` compatibility.
 
 Server verification:
 
@@ -28,4 +33,7 @@ Server verification:
 
 ## Git Compatibility
 
-Normal Git HTTPS cannot sign Sui wallet messages on every push. Octopus writes a repo-local Git `http.extraHeader` containing a signed delegate token, so the delegate private key stays on the client machine.
+Normal Git HTTPS cannot sign Sui wallet messages on every push. `ocp auth login`
+stores a Git credential containing a signed delegate token, so normal `git push`
+and private `git clone` can use the Git credential helper. The delegate private
+key stays on the client machine.
