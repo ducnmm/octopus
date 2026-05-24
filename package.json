@@ -10,7 +10,8 @@
     "check": "pnpm --filter @octopus/shared build && pnpm -r check",
     "dev:server": "pnpm --filter @octopus/shared build && pnpm --filter @octopus/server dev",
     "dev:web": "pnpm --filter @octopus/web dev",
-    "octopus": "pnpm --filter @octopus/shared build && pnpm --filter @octopus/cli start",
+    "ocp": "pnpm --filter @octopus/cli start",
+    "ocp:build": "pnpm --filter @octopus/shared build && pnpm --filter @octopus/cli build",
     "test": "pnpm --filter @octopus/shared build && pnpm -r test"
   },
   "devDependencies": {

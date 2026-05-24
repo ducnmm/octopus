@@ -2,8 +2,8 @@
 
 ## In Scope
 
-1. `octopus auth login`
-2. `octopus repo create`
+1. `ocp auth login`
+2. `ocp repo create`
 3. Git HTTP support for `git push` and `git clone`
 4. Local bare repository cache
 5. Git bundle or pack artifact upload to Walrus

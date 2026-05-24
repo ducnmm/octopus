@@ -210,19 +210,18 @@ const runGit = async (args: string[], cwd?: string): Promise<string> => {
   });
 };
 
-const configureRemote = async (
+const currentGitRemoteUrl = async (
   cwd: string | undefined,
-  remoteName: string,
+  remoteName: string
+): Promise<string> => {
+  return await runGit(["remote", "get-url", remoteName], cwd);
+};
+
+const configureAuthHeader = async (
+  cwd: string | undefined,
   remoteUrl: string,
   credentials: OctopusCredentials
 ): Promise<void> => {
-  try {
-    await runGit(["remote", "get-url", remoteName], cwd);
-    await runGit(["remote", "set-url", remoteName, remoteUrl], cwd);
-  } catch {
-    await runGit(["remote", "add", remoteName, remoteUrl], cwd);
-  }
-
   const configKey = `http.${remoteUrl}.extraHeader`;
   try {
     await runGit(["config", "--local", "--unset-all", configKey], cwd);
@@ -241,6 +240,22 @@ const configureRemote = async (
       expiresInMs: GIT_AUTH_EXPIRES_IN_MS
     })}`
   ], cwd);
+};
+
+const configureRemote = async (
+  cwd: string | undefined,
+  remoteName: string,
+  remoteUrl: string,
+  credentials: OctopusCredentials
+): Promise<void> => {
+  try {
+    await runGit(["remote", "get-url", remoteName], cwd);
+    await runGit(["remote", "set-url", remoteName, remoteUrl], cwd);
+  } catch {
+    await runGit(["remote", "add", remoteName, remoteUrl], cwd);
+  }
+
+  await configureAuthHeader(cwd, remoteUrl, credentials);
 };
 
 const startLoginCallbackServer = async (input: {
@@ -341,7 +356,7 @@ export const createProgram = (context: CliContext): Command => {
   const baseUrl = defaultBaseUrl(context.env);
 
   program
-    .name("octopus")
+    .name("ocp")
     .description("Octopus developer CLI")
     .version("0.1.0");
 
@@ -435,7 +450,7 @@ export const createProgram = (context: CliContext): Command => {
     .action(async () => {
       const credentials = await readCredentials(context.home);
       if (!credentials) {
-        throw new Error(`Not logged in. Run octopus auth login first.`);
+        throw new Error(`Not logged in. Run ocp auth login first.`);
       }
 
       writeLine(context.stdout, `Wallet:   ${credentials.walletAddress}`);
@@ -496,13 +511,33 @@ export const createProgram = (context: CliContext): Command => {
     .action(async (repo: string, options: RepoConnectOptions) => {
       const credentials = await readCredentials(context.home);
       if (!credentials) {
-        throw new Error(`Not logged in. Run octopus auth login first.`);
+        throw new Error(`Not logged in. Run ocp auth login first.`);
       }
 
       const { owner, name } = splitRepo(repo);
       const remoteUrl = new URL(`/${owner}/${name}.git`, normalizeBaseUrl(options.server)).toString();
       await configureRemote(context.cwd, options.remote, remoteUrl, credentials);
       writeLine(context.stdout, `Connected ${repo}`);
+      writeLine(context.stdout, `  remote: ${options.remote}`);
+      writeLine(context.stdout, `  url:    ${remoteUrl}`);
+      writeLine(context.stdout, `Next: git push ${options.remote} main`);
+    });
+
+  repoCommand
+    .command("sync-auth")
+    .argument("<repo>", "repository in owner/name form")
+    .option("--remote <name>", "Git remote name", "origin")
+    .description("Refresh repo-local delegate auth headers without changing the remote URL")
+    .action(async (repo: string, options: { remote: string }) => {
+      splitRepo(repo);
+      const credentials = await readCredentials(context.home);
+      if (!credentials) {
+        throw new Error(`Not logged in. Run ocp auth login first.`);
+      }
+
+      const remoteUrl = await currentGitRemoteUrl(context.cwd, options.remote);
+      await configureAuthHeader(context.cwd, remoteUrl, credentials);
+      writeLine(context.stdout, `Refreshed auth for ${repo}`);
       writeLine(context.stdout, `  remote: ${options.remote}`);
       writeLine(context.stdout, `  url:    ${remoteUrl}`);
     });
@@ -585,6 +620,87 @@ export const createProgram = (context: CliContext): Command => {
     .option("--server <url>", "Octopus server URL", baseUrl)
     .description("Restore a repository cache from durable storage")
     .action(restoreRepo);
+
+  program
+    .command("doctor")
+    .description("Check Octopus CLI, server, auth, and current Git remote configuration")
+    .option("--server <url>", "Octopus server URL", baseUrl)
+    .option("--remote <name>", "Git remote name", "origin")
+    .action(async (options: { server: string; remote: string }) => {
+      const failures: string[] = [];
+      const warnings: string[] = [];
+      const serverUrl = normalizeBaseUrl(options.server);
+
+      try {
+        const version = await runGit(["--version"]);
+        writeLine(context.stdout, `ok   git: ${version}`);
+      } catch (error) {
+        failures.push(`git is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      try {
+        const health = await requestJson<{ ok: boolean; service: string }>(new URL("/healthz", serverUrl).toString(), {
+          fetch: context.fetch,
+          method: "GET"
+        });
+        if (health.ok) {
+          writeLine(context.stdout, `ok   server: ${health.service} at ${serverUrl}`);
+        } else {
+          failures.push(`server health check returned ok=false at ${serverUrl}`);
+        }
+      } catch (error) {
+        failures.push(`server is unreachable at ${serverUrl}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      try {
+        const authConfig = await requestJson<AuthServerConfig>(new URL("/v1/auth/config", serverUrl).toString(), {
+          fetch: context.fetch,
+          method: "GET"
+        });
+        writeLine(context.stdout, `ok   auth config: ${authConfig.suiMode}/${authConfig.suiNetwork}`);
+      } catch (error) {
+        warnings.push(`auth config unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      const credentials = await readCredentials(context.home);
+      if (credentials) {
+        writeLine(context.stdout, `ok   credentials: ${credentialsPath(context.home)}`);
+        if (normalizeBaseUrl(credentials.serverUrl) !== serverUrl) {
+          warnings.push(`credentials server is ${credentials.serverUrl}, but doctor checked ${serverUrl}`);
+        }
+      } else {
+        warnings.push(`credentials not found at ${credentialsPath(context.home)}`);
+      }
+
+      try {
+        const remoteUrl = await currentGitRemoteUrl(context.cwd, options.remote);
+        writeLine(context.stdout, `ok   git remote ${options.remote}: ${remoteUrl}`);
+        const header = await runGit([
+          "config",
+          "--local",
+          "--get-all",
+          `http.${remoteUrl}.extraHeader`
+        ], context.cwd);
+        if (header.includes(delegateAuthHeaders.token)) {
+          writeLine(context.stdout, `ok   git auth header: configured for ${options.remote}`);
+        } else {
+          warnings.push(`git auth header for ${options.remote} does not include ${delegateAuthHeaders.token}`);
+        }
+      } catch {
+        warnings.push(`git remote ${options.remote} or its Octopus auth header is not configured in this directory`);
+      }
+
+      for (const warning of warnings) {
+        writeLine(context.stdout, `warn ${warning}`);
+      }
+      for (const failure of failures) {
+        writeLine(context.stderr, `fail ${failure}`);
+      }
+
+      if (failures.length > 0) {
+        process.exitCode = 1;
+      }
+    });
 
   return program;
 };

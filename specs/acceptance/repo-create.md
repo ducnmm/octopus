@@ -2,11 +2,11 @@
 
 ## Scenario
 
-Given a user has logged in with `octopus auth login`
+Given a user has logged in with `ocp auth login`
 When they run:
 
 ```bash
-octopus repo create demo --public
+ocp repo create demo --public
 ```
 
 Then:

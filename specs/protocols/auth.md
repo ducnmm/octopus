@@ -5,7 +5,7 @@
 Command:
 
 ```bash
-octopus auth login
+ocp auth login
 ```
 
 The CLI generates a local delegate key and asks the user to approve it through a Sui wallet. In testnet mode, the wallet creates an `OctopusAccount` if needed and registers both the CLI delegate key and the configured server relay delegate key on-chain.

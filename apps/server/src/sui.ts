@@ -43,6 +43,14 @@ export type SuiAnchorResult = {
   seq: number;
 };
 
+export type SuiRefDeletionResult = {
+  registryMode: "local" | "testnet";
+  repoObjectId: string;
+  refName: string;
+  oldCommit: string;
+  deletedAtMs: number;
+};
+
 export type SuiManifestSource = "sui-local" | "sui-testnet";
 
 export type SuiManifestReadResult = {
@@ -340,6 +348,55 @@ export const anchorPushManifests = async (
     });
   }
 
+  return results;
+};
+
+export const anchorDeletedRefs = async (
+  config: ServerConfig,
+  input: {
+    owner: string;
+    repo: string;
+    deletions: Array<{
+      refName: string;
+      oldCommit: string;
+    }>;
+  }
+): Promise<SuiRefDeletionResult[]> => {
+  if (input.deletions.length === 0) {
+    return [];
+  }
+
+  if (config.suiMode === "testnet") {
+    throw new Error("Sui testnet ref deletion anchoring is not implemented");
+  }
+
+  const state = await readRepoStateFile(config, input.owner, input.repo);
+  if (!state) {
+    throw new Error(`Repository state not found for ${input.owner}/${input.repo}`);
+  }
+
+  const deletedAtMs = Date.now();
+  const results: SuiRefDeletionResult[] = [];
+  for (const deletion of input.deletions) {
+    const current = state.refs[deletion.refName];
+    if (current?.commitDigest !== deletion.oldCommit) {
+      throw new Error(
+        `Sui ref mismatch for ${state.repoId} ${deletion.refName}: expected old commit ${current?.commitDigest ?? null}, deletion has ${deletion.oldCommit}`
+      );
+    }
+
+    delete state.refs[deletion.refName];
+    results.push({
+      registryMode: state.registryMode,
+      repoObjectId: state.repoObjectId,
+      refName: deletion.refName,
+      oldCommit: deletion.oldCommit,
+      deletedAtMs
+    });
+  }
+
+  state.updatedAtMs = deletedAtMs;
+  await writeRepoStateFile(config, state);
   return results;
 };
 

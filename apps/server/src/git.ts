@@ -5,9 +5,10 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { ownerNameSchema, repoNameSchema } from "@octopus/shared";
 import { parseDelegateAuth, type AuthContext } from "./auth.js";
 import type { ServerConfig } from "./config.js";
-import { createPushArtifacts, listRefs } from "./artifacts.js";
+import { createPushArtifacts, deletedRefs, listRefs } from "./artifacts.js";
 import { indexRepository } from "./indexer.js";
-import { anchorPushManifests, canReadRepo, canWriteRepo, readSuiRepoState, readSuiRepoStateForAuthorization } from "./sui.js";
+import { restoreRepository } from "./restore.js";
+import { anchorDeletedRefs, anchorPushManifests, canReadRepo, canWriteRepo, readSuiRepoState, readSuiRepoStateForAuthorization } from "./sui.js";
 import { recordPushAttempt } from "./push-attempts.js";
 
 type GitResult = {
@@ -138,6 +139,14 @@ const parseRepoFromPath = (pathName: string): { owner: string; repo: string } | 
   };
 };
 
+const repositoryExists = async (repoRoot: string, owner: string, repo: string): Promise<string | null> => {
+  try {
+    return await assertRepositoryExists(repoRoot, owner, repo);
+  } catch {
+    return null;
+  }
+};
+
 export const handleGitHttp = async (
   request: FastifyRequest,
   reply: FastifyReply,
@@ -147,14 +156,6 @@ export const handleGitHttp = async (
   const repoRef = parseRepoFromPath(url.pathname);
   if (!repoRef) {
     await reply.code(404).send({ error: "Not a Git repository path" });
-    return;
-  }
-
-  let repoPath: string;
-  try {
-    repoPath = await assertRepositoryExists(config.repoRoot, repoRef.owner, repoRef.repo);
-  } catch {
-    await reply.code(404).send({ error: "Repository not found" });
     return;
   }
 
@@ -209,6 +210,26 @@ export const handleGitHttp = async (
     }
   }
 
+  let repoPath = await repositoryExists(config.repoRoot, repoRef.owner, repoRef.repo);
+  if (!repoPath && isUploadPackRequest && repoState) {
+    try {
+      await restoreRepository(config, repoRef.owner, repoRef.repo, auth);
+      repoPath = await assertRepositoryExists(config.repoRoot, repoRef.owner, repoRef.repo);
+    } catch (error) {
+      await reply.code(503).send({
+        error: `Repository cache is unavailable and automatic restore failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      });
+      return;
+    }
+  }
+
+  if (!repoPath) {
+    await reply.code(404).send({ error: "Repository not found" });
+    return;
+  }
+
   const beforeRefs = isReceivePack ? await listRefs(repoPath) : null;
   const body = await readRequestBody(request);
   const env = {
@@ -249,6 +270,7 @@ export const handleGitHttp = async (
 
   if (isReceivePack && statusCode >= 200 && statusCode < 300 && beforeRefs) {
     const afterRefs = await listRefs(repoPath);
+    const refDeletions = deletedRefs(beforeRefs, afterRefs);
     try {
       const manifests = await createPushArtifacts({
         dataDir: config.dataDir,
@@ -272,9 +294,13 @@ export const handleGitHttp = async (
         sealKeyServers: config.sealKeyServers,
         sealThreshold: config.sealThreshold
       });
-
-      if (manifests.length > 0) {
+      if (manifests.length > 0 || refDeletions.length > 0) {
         const anchors = await anchorPushManifests(config, manifests, auth);
+        const deletedAnchors = await anchorDeletedRefs(config, {
+          owner: repoRef.owner,
+          repo: repoRef.repo,
+          deletions: refDeletions
+        });
         await recordPushAttempt(config, {
           owner: repoRef.owner,
           repo: repoRef.repo,
@@ -284,9 +310,10 @@ export const handleGitHttp = async (
           createdAtMs: Date.now()
         });
         reply.header("x-octopus-manifest-count", String(manifests.length));
+        reply.header("x-octopus-deleted-ref-count", String(deletedAnchors.length));
         reply.header("x-octopus-artifact-digest", manifests[0]?.artifactDigest ?? "");
         reply.header("x-octopus-anchor-count", String(anchors.length));
-        reply.header("x-octopus-registry-mode", anchors[0]?.registryMode ?? config.suiMode);
+        reply.header("x-octopus-registry-mode", anchors[0]?.registryMode ?? deletedAnchors[0]?.registryMode ?? config.suiMode);
         const indexedState = await readSuiRepoState(config, repoRef.owner, repoRef.repo);
         if (indexedState) {
           indexRepository(config, indexedState).catch(() => undefined);

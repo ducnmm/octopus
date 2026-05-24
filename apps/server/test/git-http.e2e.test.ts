@@ -356,6 +356,81 @@ test("serves normal git push and clone through smart HTTP", async () => {
   await git(["clone", `${baseUrl}/ducnmm/demo.git`, restoredCloneRepo]);
   const restoredClonedCommit = await git(["rev-parse", "HEAD"], restoredCloneRepo);
   expect(restoredClonedCommit).toBe(pushedCommit);
+
+  await rm(join(dataDir, "repos", "ducnmm", "demo.git"), { force: true, recursive: true });
+  const autoRestoredCloneRepo = join(workspace, "auto-restored-clone");
+  await git(["clone", `${baseUrl}/ducnmm/demo.git`, autoRestoredCloneRepo]);
+  const autoRestoredClonedCommit = await git(["rev-parse", "HEAD"], autoRestoredCloneRepo);
+  expect(autoRestoredClonedCommit).toBe(pushedCommit);
+});
+
+test("supports common branch and tag ref workflows through smart HTTP", async () => {
+  await registerDelegate();
+  const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...delegateHeaders()
+    },
+    body: JSON.stringify({
+      owner: "ducnmm",
+      name: "refs-demo",
+      visibility: "public"
+    })
+  });
+  expect(createResponse.status).toBe(201);
+
+  const sourceRepo = join(workspace, "refs-source");
+  const cloneRepo = join(workspace, "refs-clone");
+  const remoteUrl = `${baseUrl}/ducnmm/refs-demo.git`;
+  await git(["init", sourceRepo]);
+  await git(["config", "user.email", "test@octopus.local"], sourceRepo);
+  await git(["config", "user.name", "Octopus Test"], sourceRepo);
+  await writeFile(join(sourceRepo, "README.md"), "initial\n");
+  await git(["add", "README.md"], sourceRepo);
+  await git(["commit", "-m", "initial commit"], sourceRepo);
+  await git(["branch", "-M", "main"], sourceRepo);
+  await git(["remote", "add", "origin", remoteUrl], sourceRepo);
+  await git([
+    "config",
+    "--local",
+    "--add",
+    `http.${remoteUrl}.extraHeader`,
+    `${delegateAuthHeaders.token}: ${gitAuthHeaders[delegateAuthHeaders.token]}`
+  ], sourceRepo);
+  await git(["push", "origin", "main"], sourceRepo);
+
+  await git(["clone", remoteUrl, cloneRepo]);
+  await writeFile(join(sourceRepo, "README.md"), "initial\npulled\n");
+  await git(["add", "README.md"], sourceRepo);
+  await git(["commit", "-m", "update main"], sourceRepo);
+  await git(["push", "origin", "main"], sourceRepo);
+  await git(["pull", "--ff-only"], cloneRepo);
+  expect(await git(["rev-parse", "HEAD"], cloneRepo)).toBe(await git(["rev-parse", "HEAD"], sourceRepo));
+
+  await git(["checkout", "-b", "feature"], sourceRepo);
+  await writeFile(join(sourceRepo, "feature.txt"), "feature one\n");
+  await git(["add", "feature.txt"], sourceRepo);
+  await git(["commit", "-m", "feature one"], sourceRepo);
+  await git(["push", "origin", "feature"], sourceRepo);
+  const firstFeatureCommit = await git(["rev-parse", "HEAD"], sourceRepo);
+
+  await writeFile(join(sourceRepo, "feature.txt"), "feature rewritten\n");
+  await git(["add", "feature.txt"], sourceRepo);
+  await git(["commit", "--amend", "-m", "feature rewritten"], sourceRepo);
+  await git(["push", "--force", "origin", "feature"], sourceRepo);
+  const rewrittenFeatureCommit = await git(["rev-parse", "HEAD"], sourceRepo);
+  expect(rewrittenFeatureCommit).not.toBe(firstFeatureCommit);
+
+  await git(["tag", "v1"], sourceRepo);
+  await git(["push", "origin", "v1"], sourceRepo);
+  await git(["push", "origin", ":feature"], sourceRepo);
+  await git(["push", "origin", ":refs/tags/v1"], sourceRepo);
+
+  const state = await readSuiRepoState(config, "ducnmm", "refs-demo");
+  expect(state?.refs["refs/heads/main"]?.commitDigest).toBe(await git(["rev-parse", "main"], sourceRepo));
+  expect(state?.refs["refs/heads/feature"]).toBeUndefined();
+  expect(state?.refs["refs/tags/v1"]).toBeUndefined();
 });
 
 test("requires delegate headers for push and private fetch", async () => {

@@ -7,8 +7,8 @@ Octopus is not a generic "decentralized GitHub" clone. It is a recoverable Git f
 Developers keep using normal Git workflows:
 
 ```bash
-octopus auth login
-octopus repo create my-repo
+ocp auth login
+ocp repo create my-repo
 git remote add origin https://octopus.dev/ducnmm/my-repo.git
 git push origin main
 git clone https://octopus.dev/ducnmm/my-repo.git

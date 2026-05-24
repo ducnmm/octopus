@@ -16,6 +16,17 @@ import { storeArtifact, type WalrusBlobMetadata } from "./walrus.js";
 
 export type GitRefMap = Map<string, string>;
 
+export type GitRefChange = {
+  refName: string;
+  oldCommit: string | null;
+  newCommit: string;
+};
+
+export type GitRefDeletion = {
+  refName: string;
+  oldCommit: string;
+};
+
 export type PackManifest = {
   manifestId: string;
   repoId: string;
@@ -129,16 +140,8 @@ const refSlug = (refName: string): string => {
   return refName.replace(/^refs\//, "").replace(/[^A-Za-z0-9._-]+/g, "-");
 };
 
-const changedRefs = (before: GitRefMap, after: GitRefMap): Array<{
-  refName: string;
-  oldCommit: string | null;
-  newCommit: string;
-}> => {
-  const changed: Array<{
-    refName: string;
-    oldCommit: string | null;
-    newCommit: string;
-  }> = [];
+export const changedRefs = (before: GitRefMap, after: GitRefMap): GitRefChange[] => {
+  const changed: GitRefChange[] = [];
 
   for (const [refName, newCommit] of after.entries()) {
     const oldCommit = before.get(refName) ?? null;
@@ -148,6 +151,18 @@ const changedRefs = (before: GitRefMap, after: GitRefMap): Array<{
   }
 
   return changed;
+};
+
+export const deletedRefs = (before: GitRefMap, after: GitRefMap): GitRefDeletion[] => {
+  const deleted: GitRefDeletion[] = [];
+
+  for (const [refName, oldCommit] of before.entries()) {
+    if (!after.has(refName)) {
+      deleted.push({ refName, oldCommit });
+    }
+  }
+
+  return deleted;
 };
 
 export const createPushArtifacts = async (input: {

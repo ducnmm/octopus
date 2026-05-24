@@ -51,9 +51,9 @@ pnpm dev:web
 Then authenticate the CLI and connect a Git remote:
 
 ```bash
-pnpm octopus auth login --server http://127.0.0.1:48787 --web-url http://127.0.0.1:45173
-pnpm octopus repo create demo --owner ducnmm --public
-pnpm octopus repo connect ducnmm/demo --remote origin --server http://127.0.0.1:48787
+pnpm ocp auth login --server http://127.0.0.1:48787 --web-url http://127.0.0.1:45173
+pnpm ocp repo create demo --owner ducnmm --public
+pnpm ocp repo connect ducnmm/demo --remote origin --server http://127.0.0.1:48787
 git push origin main
 ```
 
@@ -108,13 +108,13 @@ transactions.
 Create a local bare repo through the CLI:
 
 ```bash
-pnpm octopus repo create demo --owner ducnmm --public
+pnpm ocp repo create demo --owner ducnmm --public
 ```
 
 After a successful push, list generated artifact manifests:
 
 ```bash
-pnpm octopus repo manifests ducnmm/demo
+pnpm ocp repo manifests ducnmm/demo
 ```
 
 Run checks:
@@ -129,14 +129,14 @@ cd contracts/sui && sui move test
 ## Core Demo
 
 ```bash
-octopus auth login
-octopus repo create demo
+ocp auth login
+ocp repo create demo
 git remote add origin http://127.0.0.1:48787/ducnmm/demo.git
 git push origin main
 
 rm -rf ./data/repos/ducnmm/demo.git
 
-octopus repo restore ducnmm/demo
+ocp repo restore ducnmm/demo
 git clone http://127.0.0.1:48787/ducnmm/demo.git restored-demo
 ```
 

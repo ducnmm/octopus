@@ -9,7 +9,7 @@ When the local bare repo cache is deleted
 And the operator runs:
 
 ```bash
-octopus repo restore ducnmm/demo
+ocp repo restore ducnmm/demo
 ```
 
 Then:

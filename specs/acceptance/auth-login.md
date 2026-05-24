@@ -6,7 +6,7 @@ Given a user has a Sui wallet
 When they run:
 
 ```bash
-octopus auth login
+ocp auth login
 ```
 
 Then:

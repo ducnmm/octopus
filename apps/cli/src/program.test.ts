@@ -258,6 +258,7 @@ test("repo connect writes remote URL and signed delegate token header", async ()
   context.cwd = repoDir;
 
   await runCli(["repo", "connect", "ducnmm/demo", "--server", "http://octopus.test"], context);
+  await runCli(["repo", "sync-auth", "ducnmm/demo"], context);
 
   const remote = await execFileAsync("git", ["remote", "get-url", "origin"], { cwd: repoDir });
   expect(remote.stdout.trim()).toBe("http://octopus.test/ducnmm/demo.git");
@@ -268,7 +269,25 @@ test("repo connect writes remote URL and signed delegate token header", async ()
   );
   expect(headers.stdout).toContain("x-octopus-auth-token:");
   expect(headers.stdout).not.toContain(identity.delegatePrivateKey);
+  expect(headers.stdout.trim().split(/\r?\n/)).toHaveLength(1);
   expect(stdout.output()).toContain("Connected ducnmm/demo");
+  expect(stdout.output()).toContain("Refreshed auth for ducnmm/demo");
   await rm(home, { recursive: true, force: true });
   await rm(repoDir, { recursive: true, force: true });
+});
+
+test("doctor reports unreachable server and missing credentials", async () => {
+  const home = await mkdtemp(join(tmpdir(), "octopus-cli-home-"));
+  const fetchImpl = vi.fn(async () => {
+    throw new Error("offline");
+  }) as unknown as OctopusFetch;
+  const { context, stderr, stdout } = createContext(fetchImpl);
+  context.home = home;
+
+  await runCli(["doctor", "--server", "http://octopus.test"], context);
+
+  expect(process.exitCode).toBe(1);
+  expect(stdout.output()).toContain("warn credentials not found");
+  expect(stderr.output()).toContain("fail server is unreachable at http://octopus.test");
+  await rm(home, { recursive: true, force: true });
 });

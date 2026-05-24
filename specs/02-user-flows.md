@@ -3,7 +3,7 @@
 ## Login
 
 ```bash
-octopus auth login
+ocp auth login
 ```
 
 Flow:
@@ -28,7 +28,7 @@ Git token/credential = Git HTTPS compatibility
 ## Create Repo
 
 ```bash
-octopus repo create my-repo --public
+ocp repo create my-repo --public
 ```
 
 The CLI calls the server API with a delegate signature. The server verifies the delegate key against Sui, then creates the repo object.
