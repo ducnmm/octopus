@@ -24,7 +24,7 @@ export type DelegateIdentity = {
 export type AuthContext = DelegateIdentity & {
   accountId: string;
   walletAddress: string;
-  source: "local" | "testnet";
+  source: "local" | "testnet" | "web";
 };
 
 type LocalAccountState = {

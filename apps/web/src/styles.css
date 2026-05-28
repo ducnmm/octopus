@@ -1,14 +1,35 @@
 :root {
-  color-scheme: light;
-  --bg: #f5f7f8;
-  --panel: #ffffff;
-  --text: #18212a;
-  --muted: #667481;
-  --line: #d9e0e6;
-  --accent: #096b5f;
-  --accent-hover: #07584f;
-  --danger: #a13a3a;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: light dark;
+  --fg-default: #24292f;
+  --fg-muted: #6e7781;
+  --canvas-default: #ffffff;
+  --canvas-muted: #f6f8fa;
+  --border-default: #d0d7de;
+  --border-muted: #d8dee4;
+  --brand-bg: #7c3aed;
+  --brand-hover: #6d28d9;
+  --brand-ring: rgba(124, 58, 237, 0.22);
+  --danger-fg: #cf222e;
+  --success-fg: #7c3aed;
+  --button-hover: #eef1f4;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg-default: #e6edf3;
+    --fg-muted: #8b949e;
+    --canvas-default: #0d1117;
+    --canvas-muted: #161b22;
+    --border-default: #30363d;
+    --border-muted: #21262d;
+    --brand-bg: #8957e5;
+    --brand-hover: #a371f7;
+    --brand-ring: rgba(163, 113, 247, 0.28);
+    --danger-fg: #ff7b72;
+    --success-fg: #a371f7;
+    --button-hover: #21262d;
+  }
 }
 
 * {
@@ -19,128 +40,177 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--canvas-default);
+  color: var(--fg-default);
+}
+
+.embedded-auth {
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.embedded-auth .auth-shell,
+.embedded-auth .auth-card {
+  width: 1px;
+  min-width: 0;
+  min-height: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
 }
 
 button {
-  min-height: 40px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--accent);
-  color: white;
-  padding: 0 16px;
   font: inherit;
-  font-weight: 650;
-  cursor: pointer;
 }
 
-button:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.shell {
-  width: min(760px, calc(100% - 32px));
+.auth-shell {
+  display: grid;
+  width: min(100%, 360px);
+  min-height: 100vh;
   margin: 0 auto;
-  padding: 56px 0;
+  place-items: center;
+  padding: 16px;
 }
 
-.panel {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  padding: 28px;
-  box-shadow: 0 12px 32px rgba(24, 33, 42, 0.08);
-}
-
-.eyebrow {
-  margin: 0 0 8px;
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 750;
-  letter-spacing: 0;
-  text-transform: uppercase;
+.auth-card {
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--canvas-default);
+  padding: 32px 16px 16px;
 }
 
 h1 {
-  margin: 0;
-  font-size: 28px;
-  line-height: 1.15;
+  margin: 0 0 22px;
+  color: var(--fg-default);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
-.grid {
+.detail-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 26px;
+  margin-bottom: 28px;
+}
+
+.detail-row {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
   gap: 12px;
+  align-items: baseline;
 }
 
-.grid div {
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 12px;
+.detail-row span {
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.grid span {
+.detail-row strong {
   display: block;
-  margin-bottom: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.grid strong {
-  display: block;
-  overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  overflow: hidden;
+  color: var(--fg-default);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 700 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 .actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+mysten-dapp-kit-connect-button {
+  --background: var(--canvas-default);
+  --foreground: var(--fg-default);
+  --primary: var(--brand-bg);
+  --primary-foreground: #ffffff;
+  --secondary: var(--canvas-muted);
+  --secondary-foreground: var(--fg-default);
+  --border: transparent;
+  --accent: var(--canvas-muted);
+  --accent-foreground: var(--fg-default);
+  --muted: var(--canvas-muted);
+  --muted-foreground: var(--fg-muted);
+  --popover: var(--canvas-default);
+  --popover-foreground: var(--fg-default);
+  --ring: var(--brand-ring);
+  --radius: 6px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-weight-medium: 700;
+  --font-weight-semibold: 700;
+  --cursor-button: pointer;
+  display: block;
+  width: 100%;
+}
+
+mysten-dapp-kit-connect-button::part(trigger),
+.authorize-button {
+  width: 100%;
+  min-height: 40px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+mysten-dapp-kit-connect-button::part(trigger) {
+  border: 0;
+  background: var(--canvas-muted);
+  color: var(--fg-default);
+}
+
+mysten-dapp-kit-connect-button::part(trigger):hover {
+  background: var(--button-hover);
+}
+
+.authorize-button {
+  border: 0;
+  background: var(--brand-bg);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.authorize-button:hover:not(:disabled) {
+  background: var(--brand-hover);
+}
+
+.authorize-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 .status {
-  margin: 0;
-  border: 1px solid var(--line);
+  margin: 12px 0 0;
+  border: 1px solid var(--border-muted);
   border-radius: 6px;
-  padding: 12px;
-  color: var(--muted);
+  background: var(--canvas-muted);
+  padding: 10px 12px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .status.success {
-  border-color: #9ccfc2;
-  color: #07584f;
-  background: #eef9f6;
+  color: var(--success-fg);
 }
 
 .status.error {
-  border-color: #e0b3b3;
-  color: var(--danger);
-  background: #fff5f5;
+  color: var(--danger-fg);
 }
 
-@media (max-width: 720px) {
-  .shell {
-    padding: 24px 0;
+@media (max-width: 380px) {
+  .auth-shell {
+    padding: 0;
   }
 
-  .panel {
-    padding: 18px;
-  }
-
-  .grid {
-    grid-template-columns: 1fr;
+  .auth-card {
+    min-height: 100vh;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+    padding: 38px 28px 16px;
   }
 }

@@ -52,10 +52,15 @@ Then authenticate the CLI and connect a Git remote:
 
 ```bash
 pnpm octopus auth login --server http://127.0.0.1:48787 --web-url http://127.0.0.1:45173
-pnpm octopus repo create demo --owner ducnmm --public
-pnpm octopus repo connect ducnmm/demo --remote origin --server http://127.0.0.1:48787
+pnpm octopus repo create demo --public
+pnpm octopus repo connect <owner-from-create>/demo --remote origin --server http://127.0.0.1:48787
 git push origin main
 ```
+
+Repo owner namespaces default to the authenticated wallet's primary SuiNS name
+when available, and fall back to the full wallet address. Passing `--owner`
+requires either a SuiNS name ending in `.sui` that resolves to the authenticated
+wallet or the authenticated wallet address itself.
 
 In testnet mode the server exposes the deployed package and registry IDs from
 `/v1/auth/config`, so login opens the on-chain wallet approval flow and registers
@@ -100,6 +105,10 @@ SEAL_KEY_SERVERS=0x...
 `SEAL_SERVER_CONFIGS` can be used instead of `SEAL_KEY_SERVERS` for weighted or
 aggregator-backed key server configs.
 
+Private pushes to durable Walrus storage (`OCTOPUS_WALRUS_MODE=cli` or `relay`)
+require `OCTOPUS_SEAL_MODE=seal`; the local deterministic seal is only accepted
+for local development storage.
+
 During local development the Sui registry path is mirrored under
 `data/sui/repos`. This gives push/restore tests the same ref-manifest shape as
 the Move package before a package is published and wired to live Sui
@@ -108,13 +117,13 @@ transactions.
 Create a local bare repo through the CLI:
 
 ```bash
-pnpm octopus repo create demo --owner ducnmm --public
+pnpm octopus repo create demo --public
 ```
 
 After a successful push, list generated artifact manifests:
 
 ```bash
-pnpm octopus repo manifests ducnmm/demo
+pnpm octopus repo manifests <owner-from-create>/demo
 ```
 
 Run checks:
@@ -131,13 +140,13 @@ cd contracts/sui && sui move test
 ```bash
 octopus auth login
 octopus repo create demo
-git remote add origin http://127.0.0.1:48787/ducnmm/demo.git
+git remote add origin http://127.0.0.1:48787/<owner-from-create>/demo.git
 git push origin main
 
-rm -rf ./data/repos/ducnmm/demo.git
+rm -rf ./data/repos/<owner-from-create>/demo.git
 
-octopus repo restore ducnmm/demo
-git clone http://127.0.0.1:48787/ducnmm/demo.git restored-demo
+octopus repo restore <owner-from-create>/demo
+git clone http://127.0.0.1:48787/<owner-from-create>/demo.git restored-demo
 ```
 
 Expected result: the restored clone has the same Git commit hash as the original repository.

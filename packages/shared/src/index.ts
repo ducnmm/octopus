@@ -9,13 +9,13 @@ export const repoNameSchema = z
 export const ownerNameSchema = z
   .string()
   .min(1)
-  .max(100)
+  .max(235)
   .regex(/^[A-Za-z0-9._-]+$/);
 
 export const repoVisibilitySchema = z.enum(["public", "private"]);
 
 export const createRepoRequestSchema = z.object({
-  owner: ownerNameSchema,
+  owner: ownerNameSchema.optional(),
   name: repoNameSchema,
   visibility: repoVisibilitySchema.default("public")
 });

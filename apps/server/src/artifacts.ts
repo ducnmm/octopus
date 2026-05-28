@@ -150,6 +150,11 @@ const changedRefs = (before: GitRefMap, after: GitRefMap): Array<{
   return changed;
 };
 
+const durableWalrusMode = (): boolean => {
+  const mode = process.env.OCTOPUS_WALRUS_MODE;
+  return mode === "cli" || mode === "relay" || mode === "walrus-relay" || mode === "upload-relay";
+};
+
 export const createPushArtifacts = async (input: {
   dataDir: string;
   repoPath: string;
@@ -203,7 +208,8 @@ export const createPushArtifacts = async (input: {
             suiNetwork: input.suiNetwork,
             sealServerConfigs: input.sealServerConfigs,
             sealKeyServers: input.sealKeyServers,
-            sealThreshold: input.sealThreshold
+            sealThreshold: input.sealThreshold,
+            allowLocalSealFallback: !durableWalrusMode()
           })
         : undefined;
     const storedDigest = visibility === "private" ? await sha256File(sourcePath) : digest;

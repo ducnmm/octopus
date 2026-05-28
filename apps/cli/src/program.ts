@@ -28,7 +28,7 @@ export type CliContext = CliIO & {
 };
 
 type RepoCreateOptions = {
-  owner: string;
+  owner?: string;
   private?: boolean | string;
   public?: boolean;
   server: string;
@@ -459,7 +459,7 @@ export const createProgram = (context: CliContext): Command => {
   repoCommand
     .command("create")
     .argument("<name>", "repository name")
-    .option("--owner <owner>", "repository owner", context.env.OCTOPUS_OWNER ?? "ducnmm")
+    .option("--owner <owner>", "repository owner namespace; defaults to primary SuiNS or wallet address", context.env.OCTOPUS_OWNER)
     .option("--public", "create a public repository")
     .option("--private [value]", "create a private repository; use --private=false for public compatibility")
     .option("--server <url>", "Octopus server URL", baseUrl)

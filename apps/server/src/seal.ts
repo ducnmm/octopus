@@ -220,14 +220,22 @@ export const encryptArtifactForRepo = async (input: {
   sealServerConfigs?: string;
   sealKeyServers?: string[];
   sealThreshold?: number;
+  allowLocalSealFallback?: boolean;
 }): Promise<SealEnvelope> => {
-  if (input.sealMode !== "seal" || !input.packageId || !input.repoObjectId || !input.accountId) {
+  const localFallback = async (reason: string): Promise<SealEnvelope> => {
+    if (input.allowLocalSealFallback === false) {
+      throw new Error(`Private artifact encryption requires SEAL for durable storage: ${reason}`);
+    }
     return await encryptArtifactWithLocalSeal(input);
+  };
+
+  if (input.sealMode !== "seal" || !input.packageId || !input.repoObjectId || !input.accountId) {
+    return await localFallback("OCTOPUS_SEAL_MODE=seal, package ID, repo object ID, and account ID are required");
   }
 
   const keyServers = resolveSealServerConfigs(input);
   if (keyServers.length === 0) {
-    return await encryptArtifactWithLocalSeal(input);
+    return await localFallback("at least one SEAL key server is required");
   }
 
   const threshold = resolveSealThreshold(input.sealThreshold, keyServers);

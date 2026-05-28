@@ -75,6 +75,7 @@ export type ServerConfig = {
   port: number;
   dataDir: string;
   repoRoot: string;
+  webUrl: string;
   suiMode: "local" | "testnet";
   suiNetwork: string;
   suiRpcUrl: string;
@@ -104,6 +105,7 @@ export const loadConfig = (): ServerConfig => {
     port: envInt(process.env.OCTOPUS_PORT ?? process.env.PORT, 48787),
     dataDir,
     repoRoot: resolve(dataDir, "repos"),
+    webUrl: process.env.OCTOPUS_WEB_URL ?? "http://127.0.0.1:45173",
     suiMode: process.env.OCTOPUS_SUI_MODE === "testnet" || process.env.SUI_NETWORK === "testnet" ? "testnet" : "local",
     suiNetwork: process.env.SUI_NETWORK ?? "localnet",
     suiRpcUrl:
