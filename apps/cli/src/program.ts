@@ -5,6 +5,7 @@ import { platform } from "node:os";
 import { Command, InvalidArgumentError } from "commander";
 import {
   authCallbackRequestSchema,
+  createPullRequestRequestSchema,
   createRepoRequestSchema,
   delegateAuthHeaders,
   type OctopusCredentials
@@ -52,6 +53,14 @@ type AuthLoginOptions = {
 
 type RepoConnectOptions = {
   remote: string;
+  server: string;
+};
+
+type PullRequestCreateOptions = {
+  base?: string;
+  head: string;
+  title: string;
+  body?: string;
   server: string;
 };
 
@@ -585,6 +594,51 @@ export const createProgram = (context: CliContext): Command => {
     .option("--server <url>", "Octopus server URL", baseUrl)
     .description("Restore a repository cache from durable storage")
     .action(restoreRepo);
+
+  const pullRequestCommand = program
+    .command("pr")
+    .description("Manage Octopus pull requests");
+
+  pullRequestCommand
+    .command("create")
+    .argument("<repo>", "repository in owner/name form")
+    .requiredOption("--head <ref>", "source branch")
+    .requiredOption("--title <title>", "pull request title")
+    .option("--base <ref>", "target branch; defaults to the repository default branch")
+    .option("--body <body>", "pull request description", "")
+    .option("--server <url>", "Octopus server URL", baseUrl)
+    .description("Open a pull request between two branches")
+    .action(async (repo: string, options: PullRequestCreateOptions) => {
+      const { owner, name } = splitRepo(repo);
+      const payload = createPullRequestRequestSchema.parse({
+        title: options.title,
+        body: options.body ?? "",
+        baseRef: options.base,
+        headRef: options.head
+      });
+
+      const response = await requestJson<{
+        pullRequest: {
+          number: number;
+          title: string;
+          baseRef: string;
+          headRef: string;
+          status: string;
+        };
+      }>(new URL(`/v1/repos/${owner}/${name}/pulls`, options.server).toString(), {
+        fetch: context.fetch,
+        method: "POST",
+        headers: await authHeaders(context.home),
+        body: JSON.stringify(payload)
+      });
+
+      const href = new URL(`/${owner}/${name}/pulls/${response.pullRequest.number}`, options.server).toString();
+      writeLine(context.stdout, `Created pull request #${response.pullRequest.number} ${owner}/${name}`);
+      writeLine(context.stdout, `  title: ${response.pullRequest.title}`);
+      writeLine(context.stdout, `  base:  ${response.pullRequest.baseRef.replace(/^refs\/heads\//, "")}`);
+      writeLine(context.stdout, `  head:  ${response.pullRequest.headRef.replace(/^refs\/heads\//, "")}`);
+      writeLine(context.stdout, `  url:   ${href}`);
+    });
 
   return program;
 };

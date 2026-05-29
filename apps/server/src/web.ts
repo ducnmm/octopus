@@ -1,5 +1,7 @@
 import type { SuiRepoState } from "./sui.js";
 import type { BlobView, IndexedCommit, RepoIndex, TreeEntry } from "./indexer.js";
+import type { PullRequest, PullRequestComparison } from "./pull-requests.js";
+import type { RepoActivityItem, RepoActivityProof } from "./repo-activity.js";
 
 export type RepoRefListItem = {
   name: string;
@@ -11,6 +13,7 @@ export type RepoRefListItem = {
 
 export type RepoListItem = {
   owner: string;
+  ownerWallet: string;
   name: string;
   repoId: string;
   visibility: SuiRepoState["visibility"];
@@ -21,8 +24,12 @@ export type RepoListItem = {
   refCount: number;
   refs: RepoRefListItem[];
   manifestCount: number;
+  readers: string[];
+  writers: string[];
   commitCount?: number;
   commitDates?: string[];
+  pullRequestCount?: number;
+  activityCount?: number;
   createdAtMs: number;
   updatedAtMs: number;
 };
@@ -30,6 +37,8 @@ export type RepoListItem = {
 export type WebViewer = {
   walletAddress: string;
 } | null;
+
+export type CommitActorMap = Record<string, string | undefined>;
 
 const shortRef = (ref: string): string => {
   return ref.replace(/^refs\/heads\//, "").replace(/^refs\/tags\//, "");
@@ -61,6 +70,7 @@ export const toRepoListItem = (state: SuiRepoState): RepoListItem => {
 
   return {
     owner: state.owner,
+    ownerWallet: state.ownerWallet,
     name: state.repo,
     repoId: state.repoId,
     visibility: state.visibility,
@@ -71,6 +81,8 @@ export const toRepoListItem = (state: SuiRepoState): RepoListItem => {
     refCount: refs.length,
     refs,
     manifestCount: state.manifests.length,
+    readers: state.readers ?? [],
+    writers: state.writers ?? [],
     createdAtMs: state.createdAtMs,
     updatedAtMs: state.updatedAtMs
   };
@@ -103,6 +115,56 @@ const shortCommit = (commit: string | null): string => {
 
 const shortWallet = (walletAddress: string): string => {
   return walletAddress.length > 14 ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}` : walletAddress;
+};
+
+type ActorDisplay = {
+  label: string;
+  title: string;
+};
+
+const isWalletOwnerLabel = (owner: string): boolean => {
+  return owner.trim().toLowerCase().startsWith("0x");
+};
+
+const actorDisplayForWallet = (repo: RepoListItem, walletAddress: string | undefined): ActorDisplay | null => {
+  const wallet = walletAddress?.trim();
+  if (!wallet) {
+    return null;
+  }
+
+  const normalizedWallet = wallet.toLowerCase();
+  const matchesOwner =
+    normalizedWallet === repo.ownerWallet.toLowerCase() ||
+    normalizedWallet === repo.owner.toLowerCase();
+  return {
+    label: matchesOwner && !isWalletOwnerLabel(repo.owner) ? repo.owner : shortWallet(wallet),
+    title: wallet
+  };
+};
+
+const gitActorTitle = (commit: IndexedCommit): string => {
+  const name = commit.committerName || commit.authorName || "Octopus";
+  const email = commit.committerEmail || commit.authorEmail;
+  return email ? `${name} <${email}>` : name;
+};
+
+const commitActorDisplay = (
+  repo: RepoListItem,
+  commit: IndexedCommit,
+  commitActors?: CommitActorMap
+): ActorDisplay => {
+  const actor = actorDisplayForWallet(repo, commitActors?.[commit.oid]);
+  if (actor) {
+    return {
+      ...actor,
+      title: `${actor.title}; Git author: ${gitActorTitle(commit)}`
+    };
+  }
+
+  return {
+    label: commit.committerName || commit.authorName || "Octopus",
+    title: gitActorTitle(commit)
+  };
 };
 
 const pluralize = (count: number, singular: string, plural = `${singular}s`): string => {
@@ -370,8 +432,8 @@ const pageStyles = `
         --active-border: #7c3aed;
         --notice-border: #d4a72c66;
         --notice-bg: #fff8c5;
-        --folder-fg: #7c3aed;
-        --folder-bg: #f5f0ff;
+        --folder-fg: #54aeff;
+        --folder-bg: #ddf4ff;
         --avatar-bg: #7c3aed;
         --contribution-empty: #ebedf0;
         --contribution-l1: #ede9fe;
@@ -405,8 +467,8 @@ const pageStyles = `
           --active-border: #a371f7;
           --notice-border: #bb800966;
           --notice-bg: #2d2100;
-          --folder-fg: #a371f7;
-          --folder-bg: #251a36;
+          --folder-fg: #58a6ff;
+          --folder-bg: #0d2d4d;
           --avatar-bg: #8957e5;
           --contribution-empty: #161b22;
           --contribution-l1: #2f1e45;
@@ -594,6 +656,57 @@ const pageStyles = `
         font-size: 13px;
       }
 
+      .repo-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px;
+        margin: 2px 0 -13px;
+      }
+
+      .repo-nav-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 40px;
+        border-bottom: 2px solid transparent;
+        color: var(--fg-default);
+        padding: 0 12px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .repo-nav-link:hover {
+        color: var(--fg-default);
+        text-decoration: none;
+      }
+
+      .repo-nav-link.is-active {
+        border-bottom-color: var(--active-border);
+        color: var(--fg-default);
+      }
+
+      .repo-nav-icon {
+        width: 16px;
+        height: 16px;
+        flex: 0 0 auto;
+        color: var(--fg-muted);
+      }
+
+      .repo-nav-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 20px;
+        border-radius: 999px;
+        background: var(--border-muted);
+        color: var(--fg-default);
+        padding: 0 6px;
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 20px;
+      }
+
       h2 {
         margin: 0 0 12px;
         color: var(--fg-default);
@@ -618,6 +731,183 @@ const pageStyles = `
       .stack {
         display: grid;
         gap: 16px;
+      }
+
+      .repo-content-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 300px;
+        gap: 32px;
+        align-items: start;
+      }
+
+      .repo-primary {
+        display: grid;
+        min-width: 0;
+        gap: 16px;
+      }
+
+      .repo-about {
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .repo-about h2 {
+        margin: 0;
+      }
+
+      .repo-about-copy {
+        margin: 0;
+        color: var(--fg-muted);
+        font-size: 14px;
+        font-style: italic;
+        line-height: 1.5;
+      }
+
+      .readme-panel {
+        overflow: hidden;
+        border: 1px solid var(--border-default);
+        border-radius: 6px;
+        background: var(--canvas-default);
+        box-shadow: var(--shadow-small);
+      }
+
+      .readme-panel-header {
+        display: flex;
+        align-items: center;
+        min-height: 48px;
+        border-bottom: 1px solid var(--border-default);
+        padding: 0 16px;
+      }
+
+      .readme-panel-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--fg-default);
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .readme-body {
+        padding: 24px;
+        color: var(--fg-default);
+        font-size: 16px;
+        line-height: 1.55;
+      }
+
+      .readme-body > :first-child {
+        margin-top: 0;
+      }
+
+      .readme-body > :last-child {
+        margin-bottom: 0;
+      }
+
+      .readme-body h1,
+      .readme-body h2,
+      .readme-body h3,
+      .readme-body h4,
+      .readme-body h5,
+      .readme-body h6 {
+        margin: 24px 0 12px;
+        padding-bottom: 0.3em;
+        border-bottom: 1px solid var(--border-muted);
+        color: var(--fg-default);
+        line-height: 1.25;
+      }
+
+      .readme-body h1 {
+        font-size: 32px;
+      }
+
+      .readme-body h2 {
+        font-size: 24px;
+      }
+
+      .readme-body h3 {
+        font-size: 20px;
+      }
+
+      .readme-body p,
+      .readme-body ul,
+      .readme-body ol,
+      .readme-body blockquote,
+      .readme-body pre {
+        margin: 0 0 16px;
+      }
+
+      .readme-body ul,
+      .readme-body ol {
+        padding-left: 2em;
+      }
+
+      .readme-body li + li {
+        margin-top: 4px;
+      }
+
+      .readme-body blockquote {
+        border-left: 4px solid var(--border-default);
+        color: var(--fg-muted);
+        padding: 0 1em;
+      }
+
+      .readme-body code {
+        display: inline;
+        border: 0;
+        background: var(--canvas-muted);
+        padding: 0.2em 0.4em;
+        font-size: 85%;
+        white-space: normal;
+      }
+
+      .readme-body pre {
+        max-height: none;
+      }
+
+      .readme-body pre code {
+        display: block;
+        background: transparent;
+        padding: 0;
+        white-space: pre;
+      }
+
+      .repo-about-list {
+        display: grid;
+        gap: 10px;
+        margin: 0;
+        border-top: 1px solid var(--border-muted);
+        padding: 14px 0 0;
+        list-style: none;
+      }
+
+      .repo-about-list li,
+      .repo-about-list a {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 9px;
+        color: var(--fg-muted);
+        font-size: 14px;
+        font-weight: 500;
+      }
+
+      .repo-about-list strong {
+        color: var(--fg-default);
+      }
+
+      .repo-about-icon {
+        width: 16px;
+        height: 16px;
+        flex: 0 0 auto;
+        color: var(--fg-muted);
+      }
+
+      .repo-about-text {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .meta,
@@ -1527,10 +1817,144 @@ const pageStyles = `
         vertical-align: middle;
       }
 
+      .repo-activity-panel {
+        overflow: hidden;
+      }
+
+      .repo-activity-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        border-bottom: 1px solid var(--border-default);
+        padding: 16px;
+      }
+
+      .repo-activity-header h2 {
+        margin: 0;
+      }
+
+      .repo-activity-header p {
+        margin: 4px 0 0;
+        color: var(--fg-muted);
+        font-size: 13px;
+      }
+
+      .repo-activity-list {
+        display: grid;
+      }
+
+      .repo-activity-item {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr);
+        gap: 12px;
+        padding: 16px;
+      }
+
+      .repo-activity-item + .repo-activity-item {
+        border-top: 1px solid var(--border-muted);
+      }
+
+      .repo-activity-kind {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border: 1px solid var(--border-muted);
+        border-radius: 50%;
+        background: var(--canvas-muted);
+        color: var(--fg-muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .repo-activity-main {
+        display: grid;
+        min-width: 0;
+        gap: 6px;
+      }
+
+      .repo-activity-title {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: baseline;
+        color: var(--fg-default);
+        font-weight: 700;
+      }
+
+      .repo-activity-title a {
+        color: var(--accent-fg);
+      }
+
+      .repo-activity-description {
+        overflow: hidden;
+        margin: 0;
+        color: var(--fg-muted);
+        font-size: 13px;
+        line-height: 1.45;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .repo-activity-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+
+      .repo-activity-proof summary {
+        width: max-content;
+        cursor: pointer;
+        color: var(--fg-muted);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .repo-activity-proof[open] summary {
+        margin-bottom: 8px;
+      }
+
+      .repo-activity-proof-grid {
+        display: grid;
+        gap: 6px;
+      }
+
+      .proof-pill {
+        display: grid;
+        grid-template-columns: 128px minmax(0, 1fr);
+        align-items: baseline;
+        max-width: 100%;
+        gap: 2px;
+        border: 1px solid var(--border-muted);
+        border-radius: 6px;
+        background: var(--canvas-muted);
+        padding: 6px 8px;
+        font-size: 12px;
+      }
+
+      .proof-label {
+        color: var(--fg-muted);
+        font-weight: 600;
+      }
+
+      .proof-value {
+        overflow: hidden;
+        color: var(--fg-default);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       .github-button {
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        gap: 6px;
         min-height: 32px;
         border: 1px solid var(--border-default);
         border-radius: 6px;
@@ -1556,6 +1980,12 @@ const pageStyles = `
 
       .github-button.primary:hover {
         background: var(--brand-hover);
+      }
+
+      .button-icon {
+        width: 16px;
+        height: 16px;
+        flex: 0 0 auto;
       }
 
       .panel {
@@ -1681,7 +2111,229 @@ const pageStyles = `
 
       .clone-url {
         display: block;
+        min-width: 0;
         padding: 8px 10px;
+      }
+
+      .clone-url-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 40px;
+        gap: 8px;
+        align-items: stretch;
+      }
+
+      .clone-copy-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        min-width: 40px;
+        border: 1px solid var(--border-default);
+        border-radius: 6px;
+        background: var(--btn-bg);
+        color: var(--fg-default);
+        cursor: pointer;
+      }
+
+      .clone-copy-button:hover,
+      .clone-copy-button:focus-visible {
+        border-color: var(--accent-fg);
+        outline: none;
+      }
+
+      .clone-copy-button.is-copied {
+        border-color: var(--success-fg);
+        color: var(--success-fg);
+      }
+
+      .clone-copy-button svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      .access-panel {
+        margin-top: 16px;
+        border-top: 1px solid var(--border-muted);
+        padding-top: 16px;
+      }
+
+      .access-page-panel .access-panel {
+        margin-top: 0;
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .access-form {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 112px auto;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .pull-request-form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .pull-request-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .form-field {
+        display: grid;
+        gap: 6px;
+      }
+
+      .form-field label {
+        color: var(--fg-muted);
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+
+      .access-input,
+      .access-select,
+      .pull-request-input,
+      .pull-request-select,
+      .pull-request-textarea {
+        min-width: 0;
+        min-height: 32px;
+        border: 1px solid var(--border-default);
+        border-radius: 6px;
+        background: var(--canvas-muted);
+        color: var(--fg-default);
+        padding: 0 10px;
+        font: inherit;
+      }
+
+      .pull-request-textarea {
+        min-height: 104px;
+        padding: 10px;
+        resize: vertical;
+      }
+
+      .access-input::placeholder,
+      .pull-request-input::placeholder,
+      .pull-request-textarea::placeholder {
+        color: var(--fg-muted);
+      }
+
+      .pull-request-title {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .pull-request-number {
+        color: var(--fg-muted);
+        font-weight: 500;
+      }
+
+      .pull-request-branches,
+      .pull-request-body {
+        color: var(--fg-muted);
+      }
+
+      .pull-request-body {
+        white-space: pre-wrap;
+      }
+
+      .pull-request-summary {
+        align-items: flex-start;
+      }
+
+      .pull-request-compare {
+        display: inline-flex;
+        min-width: 0;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        color: var(--fg-muted);
+        font-size: 13px;
+      }
+
+      .compare-ref {
+        display: inline-flex;
+        max-width: min(280px, 100%);
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border-default);
+        border-radius: 6px;
+        background: var(--canvas-muted);
+        color: var(--fg-default);
+        padding: 5px 8px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .compare-ref-label {
+        color: var(--fg-muted);
+        font-weight: 600;
+      }
+
+      .compare-ref-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .diff-stat {
+        color: var(--fg-muted);
+        white-space: nowrap;
+      }
+
+      .diff-additions {
+        color: var(--success-fg);
+      }
+
+      .diff-deletions {
+        color: var(--danger-fg);
+      }
+
+      .access-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .access-empty {
+        margin: 12px 0 0;
+        color: var(--fg-muted);
+      }
+
+      .access-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        gap: 8px;
+        align-items: center;
+        border: 1px solid var(--border-muted);
+        border-radius: 6px;
+        padding: 8px;
+      }
+
+      .access-wallet {
+        overflow: hidden;
+        color: var(--fg-default);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .access-role {
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+
+      .github-button.compact {
+        min-height: 28px;
+        padding: 0 8px;
+        font-size: 12px;
       }
 
       .clone-description,
@@ -1879,6 +2531,7 @@ const pageStyles = `
         color: #ffffff;
         font-size: 11px;
         font-weight: 700;
+        line-height: 1;
       }
 
       .commit-author,
@@ -1923,50 +2576,18 @@ const pageStyles = `
       }
 
       .entry-icon {
-        position: relative;
         display: inline-flex;
         width: 16px;
         height: 16px;
         flex: 0 0 auto;
       }
 
-      .entry-icon.folder::before,
-      .entry-icon.file::before,
-      .entry-icon.folder::after {
-        content: "";
-        position: absolute;
-        display: block;
+      .entry-icon.folder {
+        color: var(--folder-fg);
       }
 
-      .entry-icon.folder::before {
-        left: 1px;
-        top: 5px;
-        width: 14px;
-        height: 9px;
-        border: 1px solid var(--folder-fg);
-        border-radius: 2px;
-        background: var(--folder-bg);
-      }
-
-      .entry-icon.folder::after {
-        left: 2px;
-        top: 2px;
-        width: 7px;
-        height: 4px;
-        border: 1px solid var(--folder-fg);
-        border-bottom: 0;
-        border-radius: 2px 2px 0 0;
-        background: var(--folder-bg);
-      }
-
-      .entry-icon.file::before {
-        left: 3px;
-        top: 1px;
-        width: 10px;
-        height: 14px;
-        border: 1px solid var(--fg-muted);
-        border-radius: 2px;
-        background: var(--canvas-default);
+      .entry-icon.file {
+        color: var(--fg-muted);
       }
 
       pre {
@@ -2029,6 +2650,10 @@ const pageStyles = `
         }
 
         .dashboard-layout {
+          grid-template-columns: 1fr;
+        }
+
+        .repo-content-layout {
           grid-template-columns: 1fr;
         }
 
@@ -2097,6 +2722,17 @@ const pageStyles = `
         .file-browser-summary {
           align-items: flex-start;
           flex-direction: column;
+        }
+
+        .access-form,
+        .access-row,
+        .pull-request-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .access-form .github-button,
+        .access-row .github-button {
+          width: 100%;
         }
 
         h1 {
@@ -2299,6 +2935,56 @@ const authPopupScript = `
           });
         };
 
+        const accountCanExecute = (account, chain) => {
+          return account?.features?.includes("sui:signAndExecuteTransaction") &&
+            account.chains?.includes(chain);
+        };
+
+        const isAccessWallet = (wallet, chain) => {
+          const features = wallet?.features || {};
+          return Boolean(
+            features["standard:connect"]?.connect &&
+            features["sui:signAndExecuteTransaction"]?.signAndExecuteTransaction &&
+            wallet.chains?.includes(chain)
+          );
+        };
+
+        const pickAccessAccount = (accounts, preferredAddress, chain) => {
+          const normalizedPreferred = preferredAddress ? preferredAddress.toLowerCase() : "";
+          if (normalizedPreferred) {
+            const preferred = accounts.find((account) => accountCanExecute(account, chain) && account.address.toLowerCase() === normalizedPreferred);
+            if (preferred) {
+              return preferred;
+            }
+          }
+          return accounts.find((account) => accountCanExecute(account, chain)) || null;
+        };
+
+        const getAccessSigner = async (preferredAddress, chain) => {
+          const wallets = (await waitForWallets())
+            .filter((wallet) => isAccessWallet(wallet, chain))
+            .sort((left, right) => walletScore(right) - walletScore(left));
+          if (wallets.length === 0) {
+            throw new Error("No Sui wallet found for " + chain + ".");
+          }
+
+          for (const wallet of wallets) {
+            const existingAccount = pickAccessAccount(wallet.accounts || [], preferredAddress, chain);
+            if (existingAccount) {
+              return { wallet, account: existingAccount };
+            }
+          }
+
+          const wallet = wallets[0];
+          const result = await wallet.features["standard:connect"].connect();
+          const accounts = [...(result.accounts || []), ...(wallet.accounts || [])];
+          const account = pickAccessAccount(accounts, preferredAddress, chain);
+          if (!account) {
+            throw new Error("No Sui account was authorized for " + chain + ".");
+          }
+          return { wallet, account };
+        };
+
         const fetchJson = async (path, options = {}) => {
           const response = await fetch(path, {
             credentials: "same-origin",
@@ -2317,6 +3003,150 @@ const authPopupScript = `
         const currentReturnTo = () => {
           return window.location.pathname + window.location.search + window.location.hash;
         };
+
+        const formValue = (formData, key) => {
+          const value = formData.get(key);
+          return typeof value === "string" ? value.trim() : "";
+        };
+
+        const setSubmitState = (button, working) => {
+          if (!button) {
+            return;
+          }
+          if (working) {
+            button.dataset.originalText ||= button.textContent || "";
+            button.disabled = true;
+            button.setAttribute("aria-busy", "true");
+            button.textContent = "Updating";
+            return;
+          }
+          button.disabled = false;
+          button.removeAttribute("aria-busy");
+          if (button.dataset.originalText) {
+            button.textContent = button.dataset.originalText;
+          }
+        };
+
+        const copyText = async (text) => {
+          if (navigator.clipboard?.writeText && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return;
+          }
+
+          const input = document.createElement("textarea");
+          input.value = text;
+          input.setAttribute("readonly", "");
+          input.style.position = "fixed";
+          input.style.opacity = "0";
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand("copy");
+          input.remove();
+        };
+
+        document.addEventListener("click", (event) => {
+          const trigger = event.target.closest("[data-copy-text]");
+          if (!trigger) {
+            return;
+          }
+          event.preventDefault();
+          const text = trigger.getAttribute("data-copy-text") || "";
+          copyText(text).then(() => {
+            trigger.classList.add("is-copied");
+            trigger.setAttribute("title", "Copied");
+            trigger.setAttribute("aria-label", "Copied");
+            window.setTimeout(() => {
+              trigger.classList.remove("is-copied");
+              trigger.setAttribute("title", "Copy clone command");
+              trigger.setAttribute("aria-label", "Copy clone command");
+            }, 1400);
+          }).catch((error) => {
+            console.error(error);
+          });
+        });
+
+        document.addEventListener("submit", (event) => {
+          const form = event.target.closest("form[data-octopus-access-form]");
+          if (!form) {
+            return;
+          }
+          event.preventDefault();
+
+          const button = form.querySelector("button[type='submit'], button:not([type])");
+          setSubmitState(button, true);
+
+          (async () => {
+            const formData = new FormData(form);
+            const owner = formValue(formData, "owner");
+            const repo = formValue(formData, "repo");
+            if (!owner || !repo) {
+              throw new Error("Missing repository access target.");
+            }
+
+            const body = new URLSearchParams();
+            for (const [key, value] of formData.entries()) {
+              body.set(key, String(value).trim());
+            }
+
+            const transaction = await fetchJson(
+              "/v1/repos/" + encodeURIComponent(owner) + "/" + encodeURIComponent(repo) + "/access-transaction",
+              {
+                method: "POST",
+                headers: { "content-type": "application/x-www-form-urlencoded" },
+                body: body.toString()
+              }
+            );
+            const chain = typeof transaction.chain === "string" ? transaction.chain : "sui:testnet";
+            const senderWallet = typeof transaction.senderWallet === "string" ? transaction.senderWallet : "";
+            const signer = await getAccessSigner(senderWallet, chain);
+            if (senderWallet && signer.account.address.toLowerCase() !== senderWallet.toLowerCase()) {
+              throw new Error("Connect the repository owner wallet to manage contributors.");
+            }
+
+            const result = await signer.wallet.features["sui:signAndExecuteTransaction"].signAndExecuteTransaction({
+              account: signer.account,
+              chain,
+              transaction: {
+                toJSON: async () => transaction.transactionJson
+              }
+            });
+            const txDigest = typeof result?.digest === "string" ? result.digest : "";
+
+            if (txDigest) {
+              try {
+                await fetchJson("/v1/sui/transactions/" + encodeURIComponent(txDigest) + "/wait");
+              } catch (error) {
+                console.warn(error);
+              }
+            }
+
+            const activityBody = new URLSearchParams();
+            activityBody.set("walletAddress", formValue(formData, "walletAddress"));
+            activityBody.set("role", formValue(formData, "role"));
+            activityBody.set("action", formValue(formData, "action"));
+            if (txDigest) {
+              activityBody.set("txDigest", txDigest);
+            }
+            try {
+              await fetchJson(
+                "/v1/repos/" + encodeURIComponent(owner) + "/" + encodeURIComponent(repo) + "/activity/access",
+                {
+                  method: "POST",
+                  headers: { "content-type": "application/x-www-form-urlencoded" },
+                  body: activityBody.toString()
+                }
+              );
+            } catch (error) {
+              console.warn(error);
+            }
+
+            window.location.assign(formValue(formData, "returnTo") || currentReturnTo());
+          })().catch((error) => {
+            setSubmitState(button, false);
+            console.error(error);
+            window.alert(error instanceof Error ? error.message : String(error));
+          });
+        });
 
         const webSession = async () => {
           return await fetchJson("/v1/auth/web-session");
@@ -2408,14 +3238,44 @@ const authPopupScript = `
       })();
     </script>`;
 
-const branchIcon = `<svg class="branch-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M9.5 3.25a2.25 2.25 0 1 1 3 2.12V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.13a2.25 2.25 0 1 1-1.5 0V5.37a2.25 2.25 0 1 1 1.5 0v1.84A2.5 2.5 0 0 1 6 7h4a1 1 0 0 0 1-1v-.63a2.25 2.25 0 0 1-1.5-2.12Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75.75 0 0 0 0-1.5Z"></path></svg>`;
+const branchIcon = `<svg class="branch-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="3" r="1.7"></circle><circle cx="5" cy="13" r="1.7"></circle><circle cx="11" cy="4" r="1.7"></circle><path d="M5 4.7v6.6"></path><path d="M11 5.7v.8A2.5 2.5 0 0 1 8.5 9H5"></path></svg>`;
 
 const codeIcon = `<svg class="code-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M5.22 4.22a.75.75 0 0 1 0 1.06L2.5 8l2.72 2.72a.75.75 0 1 1-1.06 1.06L.97 8.59a.83.83 0 0 1 0-1.18l3.19-3.19a.75.75 0 0 1 1.06 0Zm5.56 0a.75.75 0 0 1 1.06 0l3.19 3.19a.83.83 0 0 1 0 1.18l-3.19 3.19a.75.75 0 1 1-1.06-1.06L13.5 8l-2.72-2.72a.75.75 0 0 1 0-1.06Z"></path></svg>`;
+
+const copyIcon = `<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M0 6.75A2.75 2.75 0 0 1 2.75 4h1.5a.75.75 0 0 1 0 1.5h-1.5c-.69 0-1.25.56-1.25 1.25v6.5c0 .69.56 1.25 1.25 1.25h6.5c.69 0 1.25-.56 1.25-1.25v-1.5a.75.75 0 0 1 1.5 0v1.5A2.75 2.75 0 0 1 9.25 16h-6.5A2.75 2.75 0 0 1 0 13.25Zm4-4A2.75 2.75 0 0 1 6.75 0h6.5A2.75 2.75 0 0 1 16 2.75v6.5A2.75 2.75 0 0 1 13.25 12h-6.5A2.75 2.75 0 0 1 4 9.25Zm2.75-1.25c-.69 0-1.25.56-1.25 1.25v6.5c0 .69.56 1.25 1.25 1.25h6.5c.69 0 1.25-.56 1.25-1.25v-6.5c0-.69-.56-1.25-1.25-1.25Z"></path></svg>`;
+
+const entryFolderIcon = `<svg class="entry-icon folder" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.75 4.25A1.25 1.25 0 0 1 3 3h3l1.25 1.5H13A1.25 1.25 0 0 1 14.25 5.75v6A1.25 1.25 0 0 1 13 13H3a1.25 1.25 0 0 1-1.25-1.25Z"></path></svg>`;
+const entryFileIcon = `<svg class="entry-icon file" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.25 1.75h5L12.75 5v9.25h-8.5Z"></path><path d="M9.25 1.75V5h3.5"></path></svg>`;
+
+const treeEntryIcon = (entry: TreeEntry): string => {
+  return entry.type === "tree" ? entryFolderIcon : entryFileIcon;
+};
+
+const navIcon = (paths: string): string => {
+  return `<svg class="repo-nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+};
+
+const navCodeIcon = navIcon(`<path d="m6 4-4 4 4 4"></path><path d="m10 4 4 4-4 4"></path>`);
+const navPullRequestIcon = navIcon(`<circle cx="5" cy="3" r="1.7"></circle><circle cx="5" cy="13" r="1.7"></circle><path d="M5 4.7v6.6"></path><path d="M11 3v3.5A2.5 2.5 0 0 1 8.5 9H5"></path><path d="m9.2 7 2 2-2 2"></path>`);
+const navCommitIcon = navIcon(`<path d="M2 8h4"></path><circle cx="8" cy="8" r="2.1"></circle><path d="M10 8h4"></path>`);
+const navActivityIcon = navIcon(`<path d="M3 3.5v8.25A1.25 1.25 0 0 0 4.25 13H13"></path><path d="M5 10.5 7.5 8l2 1.5L13 5.5"></path>`);
+const navSettingsIcon = navIcon(`<circle cx="8" cy="8" r="2.05"></circle><path d="M8 1.75v1.35"></path><path d="M8 12.9v1.35"></path><path d="M2.42 4.75 3.6 5.43"></path><path d="m12.4 10.57 1.18.68"></path><path d="M2.42 11.25 3.6 10.57"></path><path d="m12.4 5.43 1.18-.68"></path><path d="M5.2 2.5 5.85 3.7"></path><path d="m10.15 12.3.65 1.2"></path><path d="m5.2 13.5.65-1.2"></path><path d="m10.15 3.7.65-1.2"></path>`);
+
+const aboutIcon = (path: string): string => {
+  return `<svg class="repo-about-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="${path}"></path></svg>`;
+};
+
+const readmeIcon = aboutIcon("M2.75 1.5A1.75 1.75 0 0 0 1 3.25v9.5c0 .97.78 1.75 1.75 1.75h3.5c.64 0 1.23.23 1.7.61a.75.75 0 0 0 .1.07.75.75 0 0 0 .9-.07c.47-.38 1.06-.61 1.7-.61h2.6A1.75 1.75 0 0 0 15 12.75v-9.5a1.75 1.75 0 0 0-1.75-1.75h-2.6c-.8 0-1.55.24-2.15.66A3.68 3.68 0 0 0 6.35 1.5Zm.75 1.75c0-.14.11-.25.25-.25h2.6c.55 0 1.05.17 1.45.46v9.55a5.18 5.18 0 0 0-1.55-.26h-3.5a.25.25 0 0 1-.25-.25Zm6.15-.25h2.6c.14 0 .25.11.25.25v9.5a.25.25 0 0 1-.25.25h-2.6c-.54 0-1.06.09-1.55.26V3.46c.4-.29.9-.46 1.55-.46Z");
+const activityIcon = aboutIcon("M8 1.25a.75.75 0 0 1 .75.75v5.69l3.02 1.81a.75.75 0 0 1-.77 1.29l-3.39-2.03A.75.75 0 0 1 7.25 8V2A.75.75 0 0 1 8 1.25ZM8 14.5A6.5 6.5 0 1 0 8 1.5a.75.75 0 0 1 0-1.5 8 8 0 1 1-8 8 .75.75 0 0 1 1.5 0A6.5 6.5 0 0 0 8 14.5Z");
+const commitIcon = aboutIcon("M7.25 10.4A2.75 2.75 0 0 1 5.35 8.5H2a.75.75 0 0 1 0-1.5h3.35a2.75 2.75 0 0 1 5.3 0H14a.75.75 0 0 1 0 1.5h-3.35a2.75 2.75 0 0 1-1.9 1.9V14a.75.75 0 0 1-1.5 0Zm.75-1.3A1.25 1.25 0 1 0 8 6.6a1.25 1.25 0 0 0 0 2.5Z");
+const packageIcon = aboutIcon("M8.32.18a.75.75 0 0 0-.64 0l-6 2.75A.75.75 0 0 0 1.25 3.6v8.8c0 .3.18.58.46.7l6 2.75c.2.09.43.09.63 0l6-2.75c.27-.12.45-.4.45-.7V3.6a.75.75 0 0 0-.44-.68Zm-.32 1.5 4.18 1.92L8 5.52 3.82 3.6Zm-.75 5.14v7.2l-4.5-2.06V4.76Zm1.5 7.2v-7.2l4.5-2.06v7.2Z");
 
 type BranchSelectorTarget = {
   view: "tree" | "commits" | "blob";
   path?: string;
 };
+
+type RepoHeaderView = "activity" | "code" | "pulls" | "commits" | "settings";
 
 const repoBasePath = (repo: RepoListItem): string => {
   return `/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
@@ -2488,9 +3348,34 @@ const commitCountForRef = (index: RepoIndex, ref: string, commits: IndexedCommit
   return sameRef(ref, index.defaultBranch) ? index.commitCount : commits.length;
 };
 
+const repoNav = (repo: RepoListItem, active: RepoHeaderView, viewer?: WebViewer): string => {
+  const base = repoBasePath(repo);
+  const links: Array<{ view: RepoHeaderView; href: string; icon: string; label: string; count?: number }> = [
+    { view: "code", href: base, icon: navCodeIcon, label: "Code" },
+    { view: "pulls", href: `${base}/pulls`, icon: navPullRequestIcon, label: "Pull requests", count: repo.pullRequestCount },
+    { view: "commits", href: `${base}/commits`, icon: navCommitIcon, label: "Commits", count: repo.commitCount },
+    { view: "activity", href: `${base}/activity`, icon: navActivityIcon, label: "Activity", count: repo.activityCount }
+  ];
+  if (canManageRepoAccess(repo, viewer)) {
+    links.push({ view: "settings", href: `${base}/settings/access`, icon: navSettingsIcon, label: "Settings" });
+  }
+
+  return `<nav class="repo-nav" aria-label="Repository navigation">
+      ${links.map((link) => {
+        const className = link.view === active ? "repo-nav-link is-active" : "repo-nav-link";
+        const count = typeof link.count === "number"
+          ? `<span class="repo-nav-count" aria-label="${escapeAttr(`${link.count} ${link.label}`)}">${escapeHtml(String(link.count))}</span>`
+          : "";
+        return `<a class="${className}" href="${escapeAttr(link.href)}">${link.icon}<span>${escapeHtml(link.label)}</span>${count}</a>`;
+      }).join("")}
+    </nav>`;
+};
+
 const repoHeader = (
   repo: RepoListItem,
-  subtitle: string
+  subtitle: string,
+  active: RepoHeaderView = "code",
+  viewer?: WebViewer
 ): string => {
   const repoHref = `/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
   const ownerHref = `/${encodeURIComponent(repo.owner)}`;
@@ -2506,10 +3391,276 @@ const repoHeader = (
             </span>
           </h1>
           <p class="repo-subtitle">${escapeHtml(subtitle)}</p>
+          ${repoNav(repo, active, viewer)}
         </div>
         <div class="meta visibility-meta"><span class="badge">${escapeHtml(repo.visibility)}</span></div>
       </div>
     </header>`;
+};
+
+const canManageRepoAccess = (repo: RepoListItem, viewer?: WebViewer): boolean => {
+  if (!viewer) {
+    return false;
+  }
+
+  const walletAddress = viewer.walletAddress.toLowerCase();
+  return walletAddress === repo.ownerWallet.toLowerCase() || walletAddress === repo.owner.toLowerCase();
+};
+
+const canWritePullRequests = (repo: RepoListItem, viewer?: WebViewer): boolean => {
+  if (!viewer) {
+    return false;
+  }
+
+  const walletAddress = viewer.walletAddress.toLowerCase();
+  return (
+    walletAddress === repo.ownerWallet.toLowerCase() ||
+    walletAddress === repo.owner.toLowerCase() ||
+    repo.writers.map((writer) => writer.toLowerCase()).includes(walletAddress)
+  );
+};
+
+const repoAccessAction = (repo: RepoListItem): string => {
+  return `/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/contributors`;
+};
+
+const repoAccessHref = (repo: RepoListItem): string => {
+  return `${repoBasePath(repo)}/settings/access`;
+};
+
+const repoUsesWalletAccess = (repo: RepoListItem): boolean => {
+  return !repo.repoObjectId.startsWith("local:");
+};
+
+const renderReturnToField = (returnTo?: string): string => {
+  return returnTo ? `<input type="hidden" name="returnTo" value="${escapeAttr(returnTo)}">` : "";
+};
+
+const renderWalletAccessFields = (
+  repo: RepoListItem,
+  input: {
+    action: "add" | "remove";
+    role?: "reader" | "writer";
+    walletAddress?: string;
+  },
+  returnTo?: string
+): string => {
+  return [
+    `<input type="hidden" name="mode" value="access">`,
+    `<input type="hidden" name="autostart" value="1">`,
+    `<input type="hidden" name="owner" value="${escapeAttr(repo.owner)}">`,
+    `<input type="hidden" name="ownerWallet" value="${escapeAttr(repo.ownerWallet)}">`,
+    `<input type="hidden" name="repo" value="${escapeAttr(repo.name)}">`,
+    `<input type="hidden" name="repoObjectId" value="${escapeAttr(repo.repoObjectId)}">`,
+    `<input type="hidden" name="action" value="${input.action}">`,
+    input.role ? `<input type="hidden" name="role" value="${input.role}">` : "",
+    input.walletAddress ? `<input type="hidden" name="walletAddress" value="${escapeAttr(input.walletAddress)}">` : "",
+    renderReturnToField(returnTo)
+  ].filter(Boolean).join("");
+};
+
+const renderContributorRows = (repo: RepoListItem, returnTo?: string): string => {
+  const writers = new Set(repo.writers.map((wallet) => wallet.toLowerCase()));
+  const readers = repo.readers
+    .map((wallet) => wallet.toLowerCase())
+    .filter((wallet) => !writers.has(wallet));
+  const entries = [
+    ...[...writers].sort().map((walletAddress) => ({ walletAddress, role: "writer" as const, label: "Writer" })),
+    ...readers.sort().map((walletAddress) => ({ walletAddress, role: "reader" as const, label: "Reader" }))
+  ];
+
+  if (entries.length === 0) {
+    return `<p class="access-empty">No contributors added yet.</p>`;
+  }
+
+  const action = repoAccessAction(repo);
+  const walletAccess = repoUsesWalletAccess(repo);
+  const returnToField = renderReturnToField(returnTo);
+  return `<div class="access-list">
+      ${entries.map((entry) => `<div class="access-row">
+        <span class="access-wallet" title="${escapeAttr(entry.walletAddress)}">${escapeHtml(shortWallet(entry.walletAddress))}</span>
+        <span class="access-role">${entry.label}</span>
+        <form method="${walletAccess ? "get" : "post"}" action="${escapeAttr(walletAccess ? "/login" : action)}"${walletAccess ? ` data-octopus-access-form` : ""}>
+          ${walletAccess
+            ? renderWalletAccessFields(repo, {
+                action: "remove",
+                role: entry.role,
+                walletAddress: entry.walletAddress
+              }, returnTo)
+            : `<input type="hidden" name="action" value="remove">
+              <input type="hidden" name="role" value="${entry.role}">
+              <input type="hidden" name="walletAddress" value="${escapeAttr(entry.walletAddress)}">
+              ${returnToField}`}
+          <button class="github-button compact" type="submit">Remove</button>
+        </form>
+      </div>`).join("")}
+    </div>`;
+};
+
+const renderRepoAccessPanel = (repo: RepoListItem, viewer?: WebViewer, returnTo?: string): string => {
+  if (!canManageRepoAccess(repo, viewer)) {
+    return "";
+  }
+
+  const action = repoAccessAction(repo);
+  const walletAccess = repoUsesWalletAccess(repo);
+  const returnToField = renderReturnToField(returnTo);
+  return `<div class="access-panel">
+      <h2 class="clone-heading">Contributors</h2>
+      <form class="access-form" method="${walletAccess ? "get" : "post"}" action="${escapeAttr(walletAccess ? "/login" : action)}"${walletAccess ? ` data-octopus-access-form` : ""}>
+        ${walletAccess
+          ? renderWalletAccessFields(repo, { action: "add" }, returnTo)
+          : `<input type="hidden" name="action" value="add">${returnToField}`}
+        <input class="access-input" name="walletAddress" placeholder="0x wallet address" autocomplete="off" required>
+        <select class="access-select" name="role" aria-label="Contributor role">
+          <option value="writer">Writer</option>
+          <option value="reader">Reader</option>
+        </select>
+        <button class="github-button primary" type="submit">Add</button>
+      </form>
+      ${renderContributorRows(repo, returnTo)}
+    </div>`;
+};
+
+const pullRequestAction = (repo: RepoListItem): string => {
+  return `${repoBasePath(repo)}/pulls`;
+};
+
+const pullRequestCreateHref = (repo: RepoListItem): string => {
+  return `${repoBasePath(repo)}/pulls/new`;
+};
+
+const pullRequestHref = (repo: RepoListItem, pullRequest: PullRequest): string => {
+  return `${repoBasePath(repo)}/pulls/${pullRequest.number}`;
+};
+
+const branchOptions = (repo: RepoListItem, selectedRef: string, includeEmpty = false): string => {
+  const branches = repo.refs.length > 0
+    ? repo.refs
+    : [{
+        name: repo.defaultBranch,
+        shortName: shortRef(repo.defaultBranch),
+        commitDigest: repo.defaultBranchCommit ?? "",
+        updatedAtMs: repo.updatedAtMs,
+        isDefault: true
+      }];
+  const empty = includeEmpty ? `<option value="" disabled selected>Select branch</option>` : "";
+  return `${empty}${branches.map((branch) => {
+    const selected = !includeEmpty && sameRef(branch.name, selectedRef) ? " selected" : "";
+    return `<option value="${escapeAttr(branch.shortName)}"${selected}>${escapeHtml(branch.shortName)}</option>`;
+  }).join("")}`;
+};
+
+const renderPullRequestCreatePanel = (repo: RepoListItem, viewer?: WebViewer): string => {
+  if (!canWritePullRequests(repo, viewer)) {
+    return "";
+  }
+
+  return `<section class="panel">
+      <h2>Open pull request</h2>
+      <form class="pull-request-form" method="post" action="${escapeAttr(pullRequestAction(repo))}">
+        <div class="pull-request-grid">
+          <div class="form-field">
+            <label for="baseRef">Base</label>
+            <select class="pull-request-select" id="baseRef" name="baseRef" required>
+              ${branchOptions(repo, repo.defaultBranch)}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="headRef">Head</label>
+            <select class="pull-request-select" id="headRef" name="headRef" required>
+              ${branchOptions(repo, "", true)}
+            </select>
+          </div>
+        </div>
+        <div class="form-field">
+          <label for="title">Title</label>
+          <input class="pull-request-input" id="title" name="title" maxlength="200" autocomplete="off" required>
+        </div>
+        <div class="form-field">
+          <label for="body">Description</label>
+          <textarea class="pull-request-textarea" id="body" name="body" maxlength="10000"></textarea>
+        </div>
+        <div>
+          <button class="github-button primary" type="submit">Open pull request</button>
+        </div>
+      </form>
+    </section>`;
+};
+
+const plusIcon = `<svg class="button-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10"></path><path d="M3 8h10"></path></svg>`;
+
+const renderNewPullRequestButton = (repo: RepoListItem, viewer?: WebViewer): string => {
+  if (!canWritePullRequests(repo, viewer)) {
+    return "";
+  }
+
+  return `<a class="github-button primary" href="${escapeAttr(pullRequestCreateHref(repo))}">${plusIcon}<span>New pull request</span></a>`;
+};
+
+const renderPullRequestRows = (repo: RepoListItem, pullRequests: PullRequest[]): string => {
+  if (pullRequests.length === 0) {
+    return `<tr><td colspan="5" class="empty">No pull requests yet.</td></tr>`;
+  }
+
+  return pullRequests
+    .map((pullRequest) => {
+      const href = pullRequestHref(repo, pullRequest);
+      const author = actorDisplayForWallet(repo, pullRequest.authorWalletAddress) ?? {
+        label: shortWallet(pullRequest.authorWalletAddress),
+        title: pullRequest.authorWalletAddress
+      };
+      return `<tr>
+          <td><span class="badge">${escapeHtml(pullRequest.status)}</span></td>
+          <td>
+            <div class="pull-request-title">
+              <a href="${escapeAttr(href)}">${escapeHtml(pullRequest.title)}</a>
+              <span class="pull-request-number">#${pullRequest.number}</span>
+            </div>
+            <div class="pull-request-branches">${escapeHtml(shortRef(pullRequest.headRef))} into ${escapeHtml(shortRef(pullRequest.baseRef))}</div>
+          </td>
+          <td title="${escapeAttr(author.title)}">${escapeHtml(author.label)}</td>
+          <td><code title="${escapeAttr(pullRequest.headCommit)}">${escapeHtml(pullRequest.headCommit.slice(0, 8))}</code></td>
+          <td class="file-time-cell" title="${escapeAttr(formatDate(pullRequest.updatedAtMs))}">${escapeHtml(formatRelativeDate(pullRequest.updatedAtMs))}</td>
+        </tr>`;
+    })
+    .join("");
+};
+
+const renderPullRequestCommitRows = (
+  repo: RepoListItem,
+  commits: IndexedCommit[],
+  commitActors?: CommitActorMap
+): string => {
+  if (commits.length === 0) {
+    return `<tr><td colspan="4" class="empty">No commits in this comparison.</td></tr>`;
+  }
+
+  return commits
+    .map((commit) => {
+      const actor = commitActorDisplay(repo, commit, commitActors);
+      return `<tr>
+        <td><code title="${escapeAttr(commit.oid)}">${escapeHtml(commit.oid.slice(0, 8))}</code></td>
+        <td><div class="commit-message" title="${escapeAttr(commit.subject)}">${escapeHtml(commit.subject)}</div></td>
+        <td title="${escapeAttr(actor.title)}">${escapeHtml(actor.label)}</td>
+        <td class="file-time-cell" title="${escapeAttr(commit.authoredAt)}">${escapeHtml(formatRelativeDate(commit.authoredAt))}</td>
+      </tr>`;
+    })
+    .join("");
+};
+
+const renderPullRequestFileRows = (comparison: PullRequestComparison): string => {
+  if (comparison.files.length === 0) {
+    return `<tr><td colspan="3" class="empty">No file changes in this comparison.</td></tr>`;
+  }
+
+  return comparison.files
+    .map((file) => `<tr>
+        <td><span class="entry-name" title="${escapeAttr(file.path)}">${escapeHtml(file.path)}</span></td>
+        <td class="diff-stat"><span class="diff-additions">+${file.additions}</span></td>
+        <td class="diff-stat"><span class="diff-deletions">-${file.deletions}</span>${file.binary ? " binary" : ""}</td>
+      </tr>`)
+    .join("");
 };
 
 const renderRepoCards = (repos: RepoListItem[], emptyMessage: string): string => {
@@ -2934,13 +4085,17 @@ const initials = (value: string): string => {
   return letters ? letters.toUpperCase() : "OC";
 };
 
+const commitTimestamp = (commit: IndexedCommit): string => {
+  return commit.committedAt || commit.authoredAt;
+};
+
 const renderTreeRows = (repo: RepoListItem, ref: string, entries: TreeEntry[], latestCommit: IndexedCommit | undefined): string => {
   if (entries.length === 0) {
     return `<tr><td colspan="3" class="empty">No files in this tree.</td></tr>`;
   }
 
   const commitSubject = latestCommit?.subject ?? "No commits indexed yet";
-  const commitTime = latestCommit ? formatRelativeDate(latestCommit.authoredAt) : "";
+  const commitTime = latestCommit ? formatRelativeDate(commitTimestamp(latestCommit)) : "";
 
   return entries
     .map((entry) => {
@@ -2949,23 +4104,28 @@ const renderTreeRows = (repo: RepoListItem, ref: string, entries: TreeEntry[], l
         entry.type === "tree"
           ? `/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/tree?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(entry.path)}`
           : `/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/blob?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(entry.path)}`;
-      const iconClass = entry.type === "tree" ? "folder" : "file";
 
       return `<tr class="file-browser-row">
         <td class="file-name-cell">
           <a class="entry-link" href="${href}" title="${escapeAttr(entry.path)}">
-            <i class="entry-icon ${iconClass}" aria-hidden="true"></i>
+            ${treeEntryIcon(entry)}
             <span class="entry-name">${displayName}</span>
           </a>
         </td>
         <td class="file-message-cell"><span class="commit-message" title="${escapeAttr(commitSubject)}">${escapeHtml(commitSubject)}</span></td>
-        <td class="file-time-cell"><span title="${escapeAttr(latestCommit?.authoredAt ?? "")}">${escapeHtml(commitTime)}</span></td>
+        <td class="file-time-cell"><span title="${escapeAttr(latestCommit ? commitTimestamp(latestCommit) : "")}">${escapeHtml(commitTime)}</span></td>
       </tr>`;
     })
     .join("");
 };
 
-const renderFileBrowserHeader = (repo: RepoListItem, ref: string, commits: IndexedCommit[], commitCount: number): string => {
+const renderFileBrowserHeader = (
+  repo: RepoListItem,
+  ref: string,
+  commits: IndexedCommit[],
+  commitCount: number,
+  commitActors?: CommitActorMap
+): string => {
   const latestCommit = commits[0];
   const commitsHref = `/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/commits?ref=${encodeURIComponent(ref)}`;
 
@@ -2980,18 +4140,20 @@ const renderFileBrowserHeader = (repo: RepoListItem, ref: string, commits: Index
     </tr>`;
   }
 
-  const relativeDate = formatRelativeDate(latestCommit.authoredAt);
+  const actor = commitActorDisplay(repo, latestCommit, commitActors);
+  const actorDate = commitTimestamp(latestCommit);
+  const relativeDate = formatRelativeDate(actorDate);
   return `<tr class="file-browser-summary-row">
     <td colspan="3" class="file-browser-summary-cell">
       <div class="file-browser-summary">
         <div class="commit-lead">
-          <span class="avatar">${escapeHtml(initials(latestCommit.authorName))}</span>
-          <strong class="commit-author" title="${escapeAttr(latestCommit.authorName)}">${escapeHtml(latestCommit.authorName)}</strong>
+          <span class="avatar">${escapeHtml(initials(actor.label))}</span>
+          <strong class="commit-author" title="${escapeAttr(actor.title)}">${escapeHtml(actor.label)}</strong>
           <a class="commit-message" href="${commitsHref}" title="${escapeAttr(latestCommit.subject)}">${escapeHtml(latestCommit.subject)}</a>
         </div>
         <div class="commit-meta">
           <a href="${commitsHref}"><code>${escapeHtml(latestCommit.oid.slice(0, 7))}</code></a>
-          <span title="${escapeAttr(latestCommit.authoredAt)}">${escapeHtml(relativeDate)}</span>
+          <span title="${escapeAttr(actorDate)}">${escapeHtml(relativeDate)}</span>
           <a class="commit-count" href="${commitsHref}">${commitCount} commits</a>
         </div>
       </div>
@@ -3034,13 +4196,470 @@ const breadcrumbs = (repo: RepoListItem, ref: string, path: string): string => {
   return links.join(" / ");
 };
 
+const safeMarkdownHref = (href: string): string | null => {
+  const trimmed = href.trim();
+  if (!trimmed || trimmed.includes("\0")) {
+    return null;
+  }
+
+  if (/^(https?:\/\/|\/|#)/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(trimmed)) {
+    return null;
+  }
+
+  return trimmed;
+};
+
+const renderInlineMarkdown = (value: string): string => {
+  const pattern = /(`[^`]+`|\[[^\]]+\]\([^)]+\))/g;
+  let cursor = 0;
+  let output = "";
+  for (const match of value.matchAll(pattern)) {
+    output += escapeHtml(value.slice(cursor, match.index));
+    const token = match[0];
+    if (token.startsWith("`")) {
+      output += `<code>${escapeHtml(token.slice(1, -1))}</code>`;
+    } else {
+      const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      const href = link ? safeMarkdownHref(link[2] ?? "") : null;
+      output += href
+        ? `<a href="${escapeAttr(href)}">${escapeHtml(link?.[1] ?? "")}</a>`
+        : escapeHtml(link?.[1] ?? token);
+    }
+    cursor = (match.index ?? 0) + token.length;
+  }
+
+  output += escapeHtml(value.slice(cursor));
+  return output;
+};
+
+const renderReadmeMarkdown = (content: string): string => {
+  const lines = content.replace(/\r\n?/g, "\n").split("\n");
+  const html: string[] = [];
+  let list: "ul" | "ol" | null = null;
+  let codeFence = false;
+  let codeLines: string[] = [];
+
+  const closeList = (): void => {
+    if (list) {
+      html.push(`</${list}>`);
+      list = null;
+    }
+  };
+
+  const openList = (type: "ul" | "ol"): void => {
+    if (list === type) {
+      return;
+    }
+    closeList();
+    list = type;
+    html.push(`<${type}>`);
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+$/, "");
+    if (line.startsWith("```")) {
+      if (codeFence) {
+        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = [];
+        codeFence = false;
+      } else {
+        closeList();
+        codeFence = true;
+      }
+      continue;
+    }
+
+    if (codeFence) {
+      codeLines.push(rawLine);
+      continue;
+    }
+
+    if (!line.trim()) {
+      closeList();
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      const level = Math.min(heading[1]?.length ?? 1, 6);
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2] ?? "")}</h${level}>`);
+      continue;
+    }
+
+    const unordered = line.match(/^\s*[-*]\s+(.+)$/);
+    if (unordered) {
+      openList("ul");
+      html.push(`<li>${renderInlineMarkdown(unordered[1] ?? "")}</li>`);
+      continue;
+    }
+
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      openList("ol");
+      html.push(`<li>${renderInlineMarkdown(ordered[1] ?? "")}</li>`);
+      continue;
+    }
+
+    const quote = line.match(/^>\s?(.*)$/);
+    if (quote) {
+      closeList();
+      html.push(`<blockquote><p>${renderInlineMarkdown(quote[1] ?? "")}</p></blockquote>`);
+      continue;
+    }
+
+    closeList();
+    html.push(`<p>${renderInlineMarkdown(line)}</p>`);
+  }
+
+  if (codeFence) {
+    html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  }
+  closeList();
+  return html.join("\n");
+};
+
+const renderRepoAboutPanel = (input: {
+  repo: RepoListItem;
+}): string => {
+  return `<aside class="repo-about" aria-label="Repository about">
+      <h2>About</h2>
+      <p class="repo-about-copy">No description, website, or topics provided.</p>
+    </aside>`;
+};
+
+const renderReadmePanel = (readme: BlobView | null | undefined): string => {
+  if (!readme) {
+    return "";
+  }
+
+  const body = readme.encoding === "utf8"
+    ? renderReadmeMarkdown(readme.content)
+    : `<p class="notice">README preview is only available for UTF-8 text.</p>`;
+
+  return `<section class="readme-panel" aria-label="README preview">
+      <div class="readme-panel-header">
+        <div class="readme-panel-title">${readmeIcon}<span>${escapeHtml(readme.path)}</span></div>
+      </div>
+      <div class="readme-body">
+        ${readme.truncated ? `<p class="notice">Preview is truncated at the configured blob view limit.</p>` : ""}
+        ${body}
+      </div>
+    </section>`;
+};
+
+const repoActivityKindLabel = (kind: RepoActivityItem["kind"]): string => {
+  switch (kind) {
+    case "access":
+      return "A";
+    case "pull_request":
+      return "PR";
+    case "push":
+      return "P";
+    case "repo":
+      return "R";
+  }
+};
+
+const shortProofValue = (value: string): string => {
+  if (/^0x[0-9a-fA-F]+$/.test(value)) {
+    return shortWallet(value);
+  }
+  return value.length > 36 ? `${value.slice(0, 18)}...${value.slice(-10)}` : value;
+};
+
+const renderRepoActivityProof = (proofItems: RepoActivityProof[]): string => {
+  if (proofItems.length === 0) {
+    return "";
+  }
+
+  return `<details class="repo-activity-proof">
+      <summary>Proof</summary>
+      <div class="repo-activity-proof-grid">
+        ${proofItems.map((item) => {
+          const value = item.href
+            ? `<a class="proof-value" href="${escapeAttr(item.href)}" target="_blank" rel="noreferrer" title="${escapeAttr(item.value)}">${escapeHtml(shortProofValue(item.value))}</a>`
+            : `<span class="proof-value" title="${escapeAttr(item.value)}">${escapeHtml(shortProofValue(item.value))}</span>`;
+          return `<span class="proof-pill">
+            <span class="proof-label">${escapeHtml(item.label)}</span>
+            ${value}
+          </span>`;
+        }).join("")}
+      </div>
+    </details>`;
+};
+
+const renderRepoActivityItem = (repo: RepoListItem, item: RepoActivityItem): string => {
+  const actor = actorDisplayForWallet(repo, item.actorWalletAddress);
+  const title = item.href
+    ? `<a href="${escapeAttr(item.href)}">${escapeHtml(item.title)}</a>`
+    : escapeHtml(item.title);
+  const actorText = actor
+    ? `<span title="${escapeAttr(actor.title)}">${escapeHtml(actor.label)}</span>`
+    : "";
+
+  return `<article class="repo-activity-item">
+      <span class="repo-activity-kind" aria-hidden="true">${escapeHtml(repoActivityKindLabel(item.kind))}</span>
+      <div class="repo-activity-main">
+        <div class="repo-activity-title">${title}</div>
+        <p class="repo-activity-description" title="${escapeAttr(item.description)}">${escapeHtml(item.description)}</p>
+        <div class="repo-activity-meta">
+          ${actorText}
+          <span title="${escapeAttr(formatDate(item.createdAtMs))}">${escapeHtml(formatRelativeDate(item.createdAtMs))}</span>
+        </div>
+        ${renderRepoActivityProof(item.proof)}
+      </div>
+    </article>`;
+};
+
+export const renderRepoActivityPage = (input: {
+  repo: RepoListItem;
+  activity: RepoActivityItem[];
+  viewer?: WebViewer;
+}): string => {
+  const repo = input.repo;
+  const rows = input.activity.length === 0
+    ? `<div class="empty">No repository activity yet.</div>`
+    : `<div class="repo-activity-list">${input.activity.map((item) => renderRepoActivityItem(repo, item)).join("")}</div>`;
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Activity · ${escapeHtml(repo.repoId)} - Octopus</title>
+${faviconLinks}
+    <style>
+${pageStyles}
+    </style>
+  </head>
+  <body>
+${topNavigation(input.viewer)}
+    ${repoHeader(repo, "Repository activity", "activity", input.viewer)}
+    <main class="stack">
+      <section class="panel repo-activity-panel">
+        <div class="repo-activity-header">
+          <div>
+            <h2>Activity</h2>
+            <p>Human-readable repository actions with wallet and storage proof when available.</p>
+          </div>
+        </div>
+        ${rows}
+      </section>
+    </main>
+${authPopupScript}
+  </body>
+</html>`;
+};
+
+export const renderRepoAccessPage = (input: {
+  repo: RepoListItem;
+  viewer?: WebViewer;
+}): string => {
+  const repo = input.repo;
+  const returnTo = repoAccessHref(repo);
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Manage access · ${escapeHtml(repo.repoId)} - Octopus</title>
+${faviconLinks}
+    <style>
+${pageStyles}
+    </style>
+  </head>
+  <body>
+${topNavigation(input.viewer)}
+    ${repoHeader(repo, "Manage repository access", "settings", input.viewer)}
+    <main class="stack">
+      <section class="panel access-page-panel">
+        ${renderRepoAccessPanel(repo, input.viewer, returnTo)}
+      </section>
+    </main>
+${authPopupScript}
+  </body>
+</html>`;
+};
+
+export const renderPullRequestListPage = (input: {
+  repo: RepoListItem;
+  pullRequests: PullRequest[];
+  viewer?: WebViewer;
+}): string => {
+  const repo = input.repo;
+  const rows = renderPullRequestRows(repo, input.pullRequests);
+  const createButton = renderNewPullRequestButton(repo, input.viewer);
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pull requests · ${escapeHtml(repo.repoId)} - Octopus</title>
+${faviconLinks}
+    <style>
+${pageStyles}
+    </style>
+  </head>
+  <body>
+${topNavigation(input.viewer)}
+    ${repoHeader(repo, "Pull requests", "pulls", input.viewer)}
+    <main class="stack">
+      <section class="toolbar">
+        <div class="toolbar-group">
+          <span class="repo-stat">${escapeHtml(pluralize(input.pullRequests.length, "pull request"))}</span>
+        </div>
+        ${createButton}
+      </section>
+      <section class="table-wrap">
+        <table class="compact">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Title</th>
+              <th>Author</th>
+              <th>Head</th>
+              <th style="text-align:right">Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      </section>
+    </main>
+${authPopupScript}
+  </body>
+</html>`;
+};
+
+export const renderPullRequestCreatePage = (input: {
+  repo: RepoListItem;
+  viewer?: WebViewer;
+}): string => {
+  const repo = input.repo;
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Open pull request · ${escapeHtml(repo.repoId)} - Octopus</title>
+${faviconLinks}
+    <style>
+${pageStyles}
+    </style>
+  </head>
+  <body>
+${topNavigation(input.viewer)}
+    ${repoHeader(repo, "Open pull request", "pulls", input.viewer)}
+    <main class="stack">
+      ${renderPullRequestCreatePanel(repo, input.viewer)}
+    </main>
+${authPopupScript}
+  </body>
+</html>`;
+};
+
+export const renderPullRequestPage = (input: {
+  repo: RepoListItem;
+  pullRequest: PullRequest;
+  comparison: PullRequestComparison;
+  commitActors?: CommitActorMap;
+  viewer?: WebViewer;
+}): string => {
+  const repo = input.repo;
+  const pullRequest = input.pullRequest;
+  const comparison = input.comparison;
+  const body = pullRequest.body
+    ? `<p class="pull-request-body">${escapeHtml(pullRequest.body)}</p>`
+    : `<p class="summary-copy">No description provided.</p>`;
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>#${pullRequest.number} ${escapeHtml(pullRequest.title)} - ${escapeHtml(repo.repoId)}</title>
+${faviconLinks}
+    <style>
+${pageStyles}
+    </style>
+  </head>
+  <body>
+${topNavigation(input.viewer)}
+    ${repoHeader(repo, `Pull request #${pullRequest.number}`, "pulls", input.viewer)}
+    <main class="stack">
+      <section class="panel">
+        <div class="toolbar">
+          <div>
+            <h2>${escapeHtml(pullRequest.title)}</h2>
+            <div class="pull-request-branches">${escapeHtml(shortRef(pullRequest.headRef))} into ${escapeHtml(shortRef(pullRequest.baseRef))}</div>
+          </div>
+          <span class="badge">${escapeHtml(pullRequest.status)}</span>
+        </div>
+        ${body}
+      </section>
+      <section class="toolbar pull-request-summary">
+        <div class="toolbar-group">
+          <span class="repo-stat">${escapeHtml(pluralize(comparison.commitCount, "commit"))}</span>
+          <span class="repo-stat">${escapeHtml(pluralize(comparison.fileCount, "file"))}</span>
+          <span class="diff-stat"><span class="diff-additions">+${comparison.additions}</span> <span class="diff-deletions">-${comparison.deletions}</span></span>
+        </div>
+        <div class="pull-request-compare" aria-label="Pull request comparison">
+          <span class="compare-ref"><span class="compare-ref-label">base</span><span class="compare-ref-name">${escapeHtml(shortRef(pullRequest.baseRef))}</span></span>
+          <span aria-hidden="true">←</span>
+          <span class="compare-ref"><span class="compare-ref-label">compare</span><span class="compare-ref-name">${escapeHtml(shortRef(pullRequest.headRef))}</span></span>
+        </div>
+      </section>
+      <section class="table-wrap">
+        <table class="compact">
+          <thead>
+            <tr>
+              <th>SHA</th>
+              <th>Message</th>
+              <th>Author</th>
+              <th style="text-align:right">Authored</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${renderPullRequestCommitRows(repo, comparison.commits, input.commitActors)}
+          </tbody>
+        </table>
+      </section>
+      <section class="table-wrap">
+        <table class="compact">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Additions</th>
+              <th>Deletions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${renderPullRequestFileRows(comparison)}
+          </tbody>
+        </table>
+      </section>
+    </main>
+${authPopupScript}
+  </body>
+</html>`;
+};
+
 export const renderRepoPage = (input: {
   repo: RepoListItem;
   index: RepoIndex;
   commits: IndexedCommit[];
   tree: TreeEntry[];
+  readme?: BlobView | null;
   ref: string;
   path: string;
+  commitActors?: CommitActorMap;
   origin?: string;
   viewer?: WebViewer;
 }): string => {
@@ -3050,12 +4669,22 @@ export const renderRepoPage = (input: {
   const visibleCommitCount = commitCountForRef(input.index, input.ref, input.commits);
   const breadcrumbTrail = breadcrumbs(repo, input.ref, input.path);
   const treeRows = renderTreeRows(repo, input.ref, input.tree, latestCommit);
-  const fileBrowserHeader = renderFileBrowserHeader(repo, input.ref, input.commits, visibleCommitCount);
+  const fileBrowserHeader = renderFileBrowserHeader(
+    repo,
+    input.ref,
+    input.commits,
+    visibleCommitCount,
+    input.commitActors
+  );
   const remoteUrl = joinOriginPath(input.origin, repo.gitRemotePath);
   const cloneCommand = `git clone ${remoteUrl}`;
   const indexNotice = input.index.treeTruncated
     ? `<p class="notice">File index is truncated at ${input.index.treeEntryCount} entries. Increase OCTOPUS_INDEX_TREE_LIMIT for larger repositories.</p>`
     : "";
+  const aboutPanel = renderRepoAboutPanel({
+    repo
+  });
+  const readmePanel = renderReadmePanel(input.readme);
 
   return `<!doctype html>
 <html lang="en">
@@ -3070,49 +4699,58 @@ ${pageStyles}
   </head>
   <body>
 ${topNavigation(input.viewer)}
-    ${repoHeader(repo, `Repository ${repoId} on ${shortRef(input.ref)}`)}
-    <main class="stack">
-      <section class="toolbar">
-        <div class="toolbar-group">
-          ${renderBranchSelector(repo, input.ref, { view: "tree", path: input.path })}
-          <span class="repo-stat">${escapeHtml(pluralize(repo.refCount, "branch", "branches"))}</span>
-          ${breadcrumbTrail ? `<div class="crumbs">${breadcrumbTrail}</div>` : ""}
+    ${repoHeader(repo, `Repository ${repoId} on ${shortRef(input.ref)}`, "code", input.viewer)}
+    <main>
+      <section class="repo-content-layout">
+        <div class="repo-primary">
+          <section class="toolbar">
+            <div class="toolbar-group">
+              ${renderBranchSelector(repo, input.ref, { view: "tree", path: input.path })}
+              <span class="repo-stat">${escapeHtml(pluralize(repo.refCount, "branch", "branches"))}</span>
+              ${breadcrumbTrail ? `<div class="crumbs">${breadcrumbTrail}</div>` : ""}
+            </div>
+            <div class="toolbar-group">
+              <details class="code-dropdown">
+                <summary class="code-trigger">${codeIcon}<span>Code</span></summary>
+                <section class="summary-panel" id="repo-details">
+                  <div class="summary-tabs" aria-label="Clone location">
+                    <span class="summary-tab is-active">Local</span>
+                  </div>
+                  <div class="clone-panel">
+                    <h2 class="clone-heading">Clone</h2>
+                    <div class="clone-tabs">
+                      <span class="clone-tab is-active">HTTPS</span>
+                    </div>
+                    <div class="clone-command">
+                      <span class="clone-label">Command</span>
+                      <div class="clone-url-row">
+                        <span class="clone-url" title="${escapeAttr(cloneCommand)}">${escapeHtml(cloneCommand)}</span>
+                        <button class="clone-copy-button" type="button" title="Copy clone command" aria-label="Copy clone command" data-copy-text="${escapeAttr(cloneCommand)}">${copyIcon}</button>
+                      </div>
+                    </div>
+                    <p class="clone-description">Run this command in your terminal.</p>
+                  </div>
+                </section>
+              </details>
+            </div>
+            ${indexNotice}
+          </section>
+          <section class="table-wrap">
+            <table class="compact file-table file-browser-table">
+              <colgroup>
+                <col style="width: 40%">
+                <col>
+                <col style="width: 170px">
+              </colgroup>
+              <tbody>
+                ${fileBrowserHeader}
+                ${treeRows}
+              </tbody>
+            </table>
+          </section>
+          ${readmePanel}
         </div>
-        <div class="toolbar-group">
-          <details class="code-dropdown">
-            <summary class="code-trigger">${codeIcon}<span>Code</span></summary>
-            <section class="summary-panel" id="repo-details">
-              <div class="summary-tabs" aria-label="Clone location">
-                <span class="summary-tab is-active">Local</span>
-              </div>
-              <div class="clone-panel">
-                <h2 class="clone-heading">Clone</h2>
-                <div class="clone-tabs">
-                  <span class="clone-tab is-active">HTTPS</span>
-                </div>
-                <div class="clone-command">
-                  <span class="clone-label">Command</span>
-                  <span class="clone-url" title="${escapeAttr(cloneCommand)}">${escapeHtml(cloneCommand)}</span>
-                </div>
-                <p class="clone-description">Run this command in your terminal.</p>
-              </div>
-            </section>
-          </details>
-        </div>
-        ${indexNotice}
-      </section>
-      <section class="table-wrap">
-        <table class="compact file-table file-browser-table">
-          <colgroup>
-            <col style="width: 40%">
-            <col>
-            <col style="width: 170px">
-          </colgroup>
-          <tbody>
-            ${fileBrowserHeader}
-            ${treeRows}
-          </tbody>
-        </table>
+        ${aboutPanel}
       </section>
     </main>
 ${authPopupScript}
@@ -3125,6 +4763,7 @@ export const renderCommitsPage = (input: {
   index: RepoIndex;
   commits: IndexedCommit[];
   ref: string;
+  commitActors?: CommitActorMap;
   viewer?: WebViewer;
 }): string => {
   const repo = input.repo;
@@ -3145,13 +4784,15 @@ export const renderCommitsPage = (input: {
               : "";
             const mergeBadge = commit.parents.length > 1 ? `<span class="badge">merge</span>` : "";
 
+            const actor = commitActorDisplay(repo, commit, input.commitActors);
+
             return `<tr>
               <td><code title="${escapeAttr(commit.oid)}">${escapeHtml(commit.oid.slice(0, 8))}</code></td>
               <td>
                 <div class="commit-message" title="${escapeAttr(commit.subject)}">${escapeHtml(commit.subject)}</div>
                 ${refs}
               </td>
-              <td title="${escapeAttr(commit.authorName)}">${escapeHtml(commit.authorName)} ${mergeBadge}</td>
+              <td title="${escapeAttr(actor.title)}">${escapeHtml(actor.label)} ${mergeBadge}</td>
               <td class="file-time-cell" title="${escapeAttr(commit.authoredAt)}">${escapeHtml(authoredRelative)}</td>
             </tr>`;
           })
@@ -3170,7 +4811,7 @@ ${pageStyles}
   </head>
   <body>
 ${topNavigation(input.viewer)}
-    ${repoHeader(repo, `Commits on ${shortRef(input.ref)}`)}
+    ${repoHeader(repo, `Commits on ${shortRef(input.ref)}`, "commits", input.viewer)}
     <main class="stack">
       <section class="toolbar">
         <div class="toolbar-group">
@@ -3233,7 +4874,7 @@ ${pageStyles}
   </head>
   <body>
 ${topNavigation(input.viewer)}
-    ${repoHeader(repo, file.path)}
+    ${repoHeader(repo, file.path, "code", input.viewer)}
     <main class="stack">
       <section class="toolbar">
         <div class="toolbar-group">

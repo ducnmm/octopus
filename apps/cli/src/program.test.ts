@@ -212,6 +212,48 @@ test("repo restore calls the restore endpoint and prints the result", async () =
   expect(stdout.output()).toContain("source:   sui-local");
 });
 
+test("pr create opens a pull request", async () => {
+  const fetchImpl = vi.fn(async () =>
+    okJson({
+      pullRequest: {
+        number: 1,
+        title: "Add feature",
+        baseRef: "refs/heads/main",
+        headRef: "refs/heads/feature",
+        status: "open"
+      }
+    }, 201)
+  ) as unknown as OctopusFetch;
+  const { context, stdout } = createContext(fetchImpl);
+
+  await runCli([
+    "pr",
+    "create",
+    "ducnmm/demo",
+    "--base",
+    "main",
+    "--head",
+    "feature",
+    "--title",
+    "Add feature",
+    "--body",
+    "Ready for review"
+  ], context);
+
+  const [url, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
+  expect(String(url)).toBe("http://127.0.0.1:48787/v1/repos/ducnmm/demo/pulls");
+  expect(init?.method).toBe("POST");
+  expect(JSON.parse(String(init?.body))).toEqual({
+    title: "Add feature",
+    body: "Ready for review",
+    baseRef: "main",
+    headRef: "feature"
+  });
+  expect(stdout.output()).toContain("Created pull request #1 ducnmm/demo");
+  expect(stdout.output()).toContain("base:  main");
+  expect(stdout.output()).toContain("head:  feature");
+});
+
 test("auth login accepts the wallet callback and writes credentials", async () => {
   const home = await mkdtemp(join(tmpdir(), "octopus-cli-home-"));
   const { context, stdout } = createContext();

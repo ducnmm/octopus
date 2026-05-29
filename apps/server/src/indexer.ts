@@ -17,6 +17,9 @@ export type IndexedCommit = {
   authorName: string;
   authorEmail: string;
   authoredAt: string;
+  committerName?: string;
+  committerEmail?: string;
+  committedAt?: string;
   subject: string;
   refs: string[];
 };
@@ -205,7 +208,18 @@ const parseCommits = (raw: string): IndexedCommit[] => {
     .map((record) => record.trim())
     .filter(Boolean)
     .map((record) => {
-      const [oid = "", parents = "", authorName = "", authorEmail = "", authoredAt = "", subject = "", refs = ""] =
+      const [
+        oid = "",
+        parents = "",
+        authorName = "",
+        authorEmail = "",
+        authoredAt = "",
+        committerName = "",
+        committerEmail = "",
+        committedAt = "",
+        subject = "",
+        refs = ""
+      ] =
         record.split("\x1f");
       return {
         oid,
@@ -213,6 +227,9 @@ const parseCommits = (raw: string): IndexedCommit[] => {
         authorName,
         authorEmail,
         authoredAt,
+        committerName,
+        committerEmail,
+        committedAt,
         subject,
         refs: refs
           .split(",")
@@ -238,7 +255,7 @@ export const readCommits = async (
     "log",
     `--max-count=${Math.max(1, Math.min(limit, 500))}`,
     "--date=iso-strict",
-    "--pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%D%x1e",
+    "--pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%s%x1f%D%x1e",
     commit
   ]);
   return parseCommits(result.stdout.toString("utf8"));

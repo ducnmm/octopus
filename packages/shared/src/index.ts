@@ -22,6 +22,27 @@ export const createRepoRequestSchema = z.object({
 
 export type CreateRepoRequest = z.infer<typeof createRepoRequestSchema>;
 
+export const gitRefNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .regex(/^[A-Za-z0-9._/-]+$/)
+  .refine((value) => !value.includes(".."), "ref names must not contain '..'")
+  .refine((value) => !value.includes("//"), "ref names must not contain empty path segments")
+  .refine((value) => !value.includes("@{"), "ref names must not contain '@{'")
+  .refine((value) => !value.startsWith("/") && !value.endsWith("/"), "ref names must not start or end with '/'")
+  .refine((value) => !value.endsWith(".") && !value.endsWith(".lock"), "ref names must not end with '.' or '.lock'");
+
+export const createPullRequestRequestSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  body: z.string().trim().max(10_000).default(""),
+  baseRef: gitRefNameSchema.optional(),
+  headRef: gitRefNameSchema
+});
+
+export type CreatePullRequestRequest = z.infer<typeof createPullRequestRequestSchema>;
+
 export const gitDelegateKeyHeader = "x-octopus-delegate-key";
 export const gitAccountIdHeader = "x-octopus-account-id";
 export const delegateAuthTokenHeader = "x-octopus-auth-token";

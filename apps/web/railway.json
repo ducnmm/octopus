@@ -4,7 +4,12 @@
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile",
     "watchPatterns": [
-      "/apps/web/**"
+      "/apps/web/**",
+      "/packages/shared/**",
+      "/package.json",
+      "/pnpm-lock.yaml",
+      "/pnpm-workspace.yaml",
+      "/tsconfig.base.json"
     ]
   },
   "deploy": {

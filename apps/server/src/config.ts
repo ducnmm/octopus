@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { envInt } from "@octopus/shared";
@@ -70,6 +71,10 @@ const sealKeyServers = (): string[] => {
     .filter(Boolean);
 };
 
+const defaultWebSessionSecret = (dataDir: string): string => {
+  return createHash("sha256").update("octopus-web-session:").update(dataDir).digest("hex");
+};
+
 export type ServerConfig = {
   host: string;
   port: number;
@@ -91,6 +96,7 @@ export type ServerConfig = {
   sealServerConfigs?: string;
   sealKeyServers: string[];
   sealThreshold?: number;
+  webSessionSecret: string;
   delegateCacheTtlMs: number;
 };
 
@@ -125,6 +131,7 @@ export const loadConfig = (): ServerConfig => {
     sealServerConfigs: process.env.SEAL_SERVER_CONFIGS || undefined,
     sealKeyServers: sealKeyServers(),
     sealThreshold: process.env.SEAL_THRESHOLD ? envInt(process.env.SEAL_THRESHOLD, 1) : undefined,
+    webSessionSecret: process.env.OCTOPUS_WEB_SESSION_SECRET || defaultWebSessionSecret(dataDir),
     delegateCacheTtlMs: envInt(process.env.OCTOPUS_DELEGATE_CACHE_TTL_MS, 60_000)
   };
 };

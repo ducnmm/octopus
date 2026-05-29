@@ -255,6 +255,7 @@ export const handleGitHttp = async (
         repoPath,
         owner: repoRef.owner,
         repo: repoRef.repo,
+        actorWalletAddress: auth?.walletAddress,
         beforeRefs,
         afterRefs,
         visibility: repoState?.visibility ?? "public",

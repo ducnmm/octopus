@@ -21,6 +21,7 @@ export type PackManifest = {
   repoId: string;
   owner: string;
   repo: string;
+  actorWalletAddress?: string;
   refName: string;
   oldCommit: string | null;
   newCommit: string;
@@ -173,6 +174,7 @@ export const createPushArtifacts = async (input: {
   suiNetwork?: string;
   serverSuiPrivateKeys?: string[];
   walrusOwnerAddress?: string;
+  actorWalletAddress?: string;
   sealServerConfigs?: string;
   sealKeyServers?: string[];
   sealThreshold?: number;
@@ -232,6 +234,7 @@ export const createPushArtifacts = async (input: {
       octopus_repo_object_id: input.repoObjectId ?? "",
       octopus_owner: input.owner,
       octopus_repo: input.repo,
+      ...(input.actorWalletAddress ? { octopus_actor_wallet: input.actorWalletAddress } : {}),
       octopus_visibility: visibility,
       octopus_package_id: input.packageId ?? "",
       octopus_artifact_digest: digest,
@@ -261,6 +264,7 @@ export const createPushArtifacts = async (input: {
         repoId,
         owner: input.owner,
         repo: input.repo,
+        actorWalletAddress: input.actorWalletAddress,
         refName: ref.refName,
         oldCommit: ref.oldCommit,
         newCommit: ref.newCommit,

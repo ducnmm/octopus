@@ -1,8 +1,15 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
+import { Transaction } from "@mysten/sui/transactions";
 import { verifyPersonalMessageSignature } from "@mysten/sui/verify";
-import { createRepoRequestSchema, delegateAuthHeaders, registerDelegateRequestSchema } from "@octopus/shared";
+import {
+  createPullRequestRequestSchema,
+  createRepoRequestSchema,
+  delegateAuthHeaders,
+  registerDelegateRequestSchema
+} from "@octopus/shared";
 import { readRepoManifests } from "./artifacts.js";
 import {
   identityFromPrivateKey,
@@ -11,13 +18,40 @@ import {
   redactDelegateSecrets,
   type AuthContext
 } from "./auth.js";
+import { readCommitActors } from "./commit-actors.js";
 import type { ServerConfig } from "./config.js";
 import { handleGitHttp, initBareRepository } from "./git.js";
 import { bareRepoPath } from "./git.js";
-import { ensureRepoIndex, indexRepository, readBlob, readCommits, readTree } from "./indexer.js";
+import {
+  ensureRepoIndex,
+  indexRepository,
+  readBlob,
+  readCommits,
+  readTree,
+  type BlobView,
+  type TreeEntry
+} from "./indexer.js";
 import { resolveRepoOwnerNamespace } from "./namespace.js";
+import {
+  comparePullRequest,
+  createPullRequest,
+  listPullRequests,
+  readPullRequest
+} from "./pull-requests.js";
+import { listRepoActivity, recordRepoAccessActivity } from "./repo-activity.js";
 import { restoreRepository } from "./restore.js";
-import { canReadRepo, canWriteRepo, ensureSuiRepo, listSuiRepoStates, readSuiRepoState, type SuiRepoState } from "./sui.js";
+import {
+  canManageRepoAccess,
+  canReadRepo,
+  canWriteRepo,
+  ensureSuiRepo,
+  listSuiRepoStates,
+  readSuiRepoState,
+  updateSuiRepoAccess,
+  type SuiRepoAccessAction,
+  type SuiRepoAccessRole,
+  type SuiRepoState
+} from "./sui.js";
 import {
   renderBlobPage,
   renderCommitsPage,
@@ -25,6 +59,11 @@ import {
   renderPrivateRepoLoginPage,
   renderPrivateRepoUnlockPage,
   renderProfilePage,
+  renderPullRequestCreatePage,
+  renderPullRequestListPage,
+  renderPullRequestPage,
+  renderRepoActivityPage,
+  renderRepoAccessPage,
   renderRepoPage,
   toRepoListItem,
   type WebViewer
@@ -138,6 +177,16 @@ type WebSession = {
   expiresAtMs: number;
 };
 
+type WebSessionCookiePayload = {
+  v: 1;
+  sessionId: string;
+  accountId: string;
+  walletAddress: string;
+  unlockedRepoIds: string[];
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
 type RepoUnlockChallenge = WebChallenge & {
   repoId: string;
   sessionId: string;
@@ -145,7 +194,6 @@ type RepoUnlockChallenge = WebChallenge & {
 
 const webChallenges = new Map<string, WebChallenge>();
 const repoUnlockChallenges = new Map<string, RepoUnlockChallenge>();
-const webSessions = new Map<string, WebSession>();
 
 const webAccountId = (walletAddress: string): string => {
   const digest = createHash("sha256").update(walletAddress.toLowerCase()).digest("hex").slice(0, 40);
@@ -193,31 +241,102 @@ const cleanupWebAuth = (): void => {
       repoUnlockChallenges.delete(nonce);
     }
   }
-  for (const [sessionId, session] of webSessions) {
-    if (session.expiresAtMs <= now) {
-      webSessions.delete(sessionId);
+};
+
+const signWebSessionCookiePayload = (payload: string, secret: string): string => {
+  return createHmac("sha256", secret).update(payload).digest("base64url");
+};
+
+const constantTimeEqual = (left: string, right: string): boolean => {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+};
+
+const webSessionPayload = (sessionId: string, session: WebSession): WebSessionCookiePayload => ({
+  v: 1,
+  sessionId,
+  accountId: session.accountId,
+  walletAddress: session.walletAddress,
+  unlockedRepoIds: [...session.unlockedRepoIds],
+  createdAtMs: session.createdAtMs,
+  expiresAtMs: session.expiresAtMs
+});
+
+const encodeWebSessionCookie = (sessionId: string, session: WebSession, secret: string): string => {
+  const payload = Buffer.from(JSON.stringify(webSessionPayload(sessionId, session)), "utf8").toString("base64url");
+  return `${payload}.${signWebSessionCookiePayload(payload, secret)}`;
+};
+
+const decodeWebSessionCookie = (value: string, secret: string): { sessionId: string; session: WebSession } | null => {
+  const [payload, signature, extra] = value.split(".");
+  if (!payload || !signature || extra !== undefined) {
+    return null;
+  }
+  if (!constantTimeEqual(signature, signWebSessionCookiePayload(payload, secret))) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) {
+    return null;
+  }
+
+  const v = parsed.v;
+  const sessionId = parsed.sessionId;
+  const accountId = parsed.accountId;
+  const walletAddress = parsed.walletAddress;
+  const createdAtMs = parsed.createdAtMs;
+  const expiresAtMs = parsed.expiresAtMs;
+  const unlockedRepoIds = parsed.unlockedRepoIds;
+  if (
+    v !== 1 ||
+    typeof sessionId !== "string" ||
+    typeof accountId !== "string" ||
+    typeof walletAddress !== "string" ||
+    typeof createdAtMs !== "number" ||
+    typeof expiresAtMs !== "number" ||
+    !Array.isArray(unlockedRepoIds) ||
+    unlockedRepoIds.some((repoId) => typeof repoId !== "string")
+  ) {
+    return null;
+  }
+  if (expiresAtMs <= Date.now()) {
+    return null;
+  }
+
+  return {
+    sessionId,
+    session: {
+      accountId,
+      walletAddress,
+      unlockedRepoIds: new Set(unlockedRepoIds),
+      createdAtMs,
+      expiresAtMs
     }
-  }
+  };
 };
 
-const webSessionEntryFromRequest = (request: FastifyRequest): { sessionId: string; session: WebSession } | null => {
+const webSessionEntryFromRequest = (
+  request: FastifyRequest,
+  config: ServerConfig
+): { sessionId: string; session: WebSession } | null => {
   cleanupWebAuth();
-  const sessionId = parseCookies(request)[webSessionCookieName];
-  if (!sessionId) {
+  const cookie = parseCookies(request)[webSessionCookieName];
+  if (!cookie) {
     return null;
   }
 
-  const session = webSessions.get(sessionId);
-  if (!session || session.expiresAtMs <= Date.now()) {
-    webSessions.delete(sessionId);
-    return null;
-  }
-
-  return { sessionId, session };
+  return decodeWebSessionCookie(cookie, config.webSessionSecret);
 };
 
-const webSessionFromRequest = (request: FastifyRequest): WebSession | null => {
-  return webSessionEntryFromRequest(request)?.session ?? null;
+const webSessionFromRequest = (request: FastifyRequest, config: ServerConfig): WebSession | null => {
+  return webSessionEntryFromRequest(request, config)?.session ?? null;
 };
 
 const authFromWebSession = (session: WebSession): AuthContext => ({
@@ -228,28 +347,33 @@ const authFromWebSession = (session: WebSession): AuthContext => ({
   source: "web"
 });
 
-const webViewerFromRequest = (request: FastifyRequest): WebViewer => {
-  const session = webSessionFromRequest(request);
+const webViewerFromRequest = (request: FastifyRequest, config: ServerConfig): WebViewer => {
+  const session = webSessionFromRequest(request, config);
   return session ? { walletAddress: session.walletAddress } : null;
 };
 
 const setWebSessionCookie = (
   reply: FastifyReply,
   sessionId: string,
-  expiresAtMs: number,
+  session: WebSession,
+  secret: string,
   secure: boolean
 ): void => {
-  const maxAge = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000));
+  const maxAge = Math.max(0, Math.floor((session.expiresAtMs - Date.now()) / 1000));
   const secureAttr = secure ? "; Secure" : "";
+  const cookie = encodeWebSessionCookie(sessionId, session, secret);
   reply.header(
     "set-cookie",
-    `${webSessionCookieName}=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureAttr}`
+    `${webSessionCookieName}=${encodeURIComponent(cookie)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureAttr}`
   );
 };
 
 const clearWebSessionCookie = (reply: FastifyReply, secure: boolean): void => {
   const secureAttr = secure ? "; Secure" : "";
-  reply.header("set-cookie", `${webSessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureAttr}`);
+  reply.header(
+    "set-cookie",
+    `${webSessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secureAttr}`
+  );
 };
 
 export const buildServer = (config: ServerConfig) => {
@@ -306,6 +430,13 @@ export const buildServer = (config: ServerConfig) => {
       done(null, body);
     }
   );
+  app.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "string" },
+    (_request, body, done) => {
+      done(null, body);
+    }
+  );
 
   app.get("/healthz", async () => ({
     ok: true,
@@ -351,7 +482,7 @@ export const buildServer = (config: ServerConfig) => {
       }
     }
 
-    const session = webSessionFromRequest(request);
+    const session = webSessionFromRequest(request, config);
     return session ? authFromWebSession(session) : null;
   };
 
@@ -372,6 +503,37 @@ export const buildServer = (config: ServerConfig) => {
         return item;
       }
     }));
+  };
+
+  const openPullRequestCount = (
+    pullRequests: Awaited<ReturnType<typeof listPullRequests>>
+  ): number => {
+    return pullRequests.filter((pullRequest) => pullRequest.status === "open").length;
+  };
+
+  const repoListItemWithCounts = async (
+    state: SuiRepoState,
+    known: {
+      index?: Awaited<ReturnType<typeof ensureRepoIndex>>;
+      pullRequests?: Awaited<ReturnType<typeof listPullRequests>>;
+      activity?: Awaited<ReturnType<typeof listRepoActivity>>;
+    } = {}
+  ) => {
+    const [index, pullRequests, activity] = await Promise.all([
+      known.index ? Promise.resolve(known.index) : ensureRepoIndex(config, state).catch(() => null),
+      known.pullRequests ? Promise.resolve(known.pullRequests) : listPullRequests(config, state.owner, state.repo).catch(() => []),
+      known.activity ? Promise.resolve(known.activity) : listRepoActivity(config, state).catch(() => [])
+    ]);
+
+    return {
+      ...toRepoListItem(state),
+      ...(index ? {
+        commitCount: index.commitCount,
+        commitDates: index.commits.map((commit) => commit.authoredAt)
+      } : {}),
+      pullRequestCount: openPullRequestCount(pullRequests),
+      activityCount: activity.length
+    };
   };
 
   const authorizedRepoState = async (
@@ -434,6 +596,89 @@ export const buildServer = (config: ServerConfig) => {
     return error;
   };
 
+  const pullRequestNumber = (value: unknown): number => {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (!/^[1-9][0-9]*$/.test(text)) {
+      throw httpError("Pull request number must be a positive integer", 400);
+    }
+    return Number.parseInt(text, 10);
+  };
+
+  const requestBodyRecord = (body: unknown): Record<string, string> => {
+    if (typeof body === "string") {
+      return Object.fromEntries(new URLSearchParams(body).entries());
+    }
+    if (!isRecord(body)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(body)
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    );
+  };
+
+  const normalizedWalletAddress = (value: unknown): string => {
+    const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (!/^0x[0-9a-f]+$/.test(text) || text.length > 66) {
+      throw httpError("Contributor wallet address must be a Sui address", 400);
+    }
+    return text;
+  };
+
+  const accessRole = (value: unknown): SuiRepoAccessRole => {
+    return value === "reader" ? "reader" : "writer";
+  };
+
+  const accessAction = (value: unknown): SuiRepoAccessAction => {
+    return value === "remove" ? "remove" : "add";
+  };
+
+  const repoAccessFunctionName = (
+    action: SuiRepoAccessAction,
+    role: SuiRepoAccessRole
+  ): "add_member" | "add_reader" | "remove_member" | "remove_reader" => {
+    if (action === "remove") {
+      return role === "reader" ? "remove_reader" : "remove_member";
+    }
+
+    return role === "reader" ? "add_reader" : "add_member";
+  };
+
+  const createPullRequestInput = (body: unknown) => {
+    try {
+      return createPullRequestRequestSchema.parse(requestBodyRecord(body));
+    } catch (error) {
+      throw httpError(error instanceof Error ? error.message : "Invalid pull request input", 400);
+    }
+  };
+
+  const readReadmePreview = async (
+    repoPath: string,
+    ref: string,
+    path: string,
+    tree: TreeEntry[]
+  ): Promise<BlobView | null> => {
+    if (path) {
+      return null;
+    }
+
+    const readme = tree.find((entry) =>
+      entry.type === "blob" &&
+      !entry.path.includes("/") &&
+      /^readme(?:\..*)?$/i.test(entry.path)
+    );
+    if (!readme) {
+      return null;
+    }
+
+    try {
+      return await readBlob(repoPath, ref, readme.path);
+    } catch {
+      return null;
+    }
+  };
+
   const normalizeReturnTo = (value: unknown, origin?: string): string => {
     const text = typeof value === "string" && value.trim() ? value.trim() : "/";
     if (text.startsWith("/") && !text.startsWith("//")) {
@@ -491,7 +736,7 @@ export const buildServer = (config: ServerConfig) => {
       return true;
     }
 
-    return Boolean(webSessionEntryFromRequest(request)?.session.unlockedRepoIds.has(state.repoId));
+    return Boolean(webSessionEntryFromRequest(request, config)?.session.unlockedRepoIds.has(state.repoId));
   };
 
   const requireRepoContentAccess = (request: FastifyRequest, state: SuiRepoState): void => {
@@ -502,7 +747,7 @@ export const buildServer = (config: ServerConfig) => {
     const error = new Error("Repository content is locked. Unlock this repository with your wallet first.") as Error & {
       statusCode: number;
     };
-    error.statusCode = webSessionEntryFromRequest(request) ? 423 : 401;
+    error.statusCode = webSessionEntryFromRequest(request, config) ? 423 : 401;
     throw error;
   };
 
@@ -520,7 +765,7 @@ export const buildServer = (config: ServerConfig) => {
       if ((statusCode === 401 || statusCode === 403) && state?.visibility === "private") {
         await reply.code(statusCode).type("text/html; charset=utf-8").send(renderPrivateRepoLoginPage({
           repo: toRepoListItem(state),
-          viewer: webViewerFromRequest(request),
+          viewer: webViewerFromRequest(request, config),
           loginHref: webLoginUrl(request, request.url),
           message: statusCode === 403
             ? "This wallet does not have access to this private repository."
@@ -549,7 +794,7 @@ export const buildServer = (config: ServerConfig) => {
         ? (error as Error & { statusCode: number }).statusCode
         : 500;
       if (statusCode === 423 || statusCode === 401) {
-        const viewer = webViewerFromRequest(request);
+        const viewer = webViewerFromRequest(request, config);
         await reply.code(statusCode).type("text/html; charset=utf-8").send(viewer
           ? renderPrivateRepoUnlockPage({
               repo: toRepoListItem(state),
@@ -570,30 +815,267 @@ export const buildServer = (config: ServerConfig) => {
   };
 
   app.get<{
-    Querystring: { returnTo?: string; embed?: string };
+    Querystring: {
+      action?: string;
+      autostart?: string;
+      embed?: string;
+      mode?: string;
+      owner?: string;
+      ownerWallet?: string;
+      repo?: string;
+      repoObjectId?: string;
+      returnTo?: string;
+      role?: string;
+      walletAddress?: string;
+    };
   }>("/login", async (request, reply) => {
+    const mode = request.query.mode === "access" || request.query.mode === "unlock"
+      ? request.query.mode
+      : "web";
+    const serverOrigin = serverOriginForRequest(request);
+    const url = new URL("/login", config.webUrl);
+    url.searchParams.set("mode", mode);
+    url.searchParams.set("server", serverOrigin);
+    url.searchParams.set("returnTo", normalizeReturnTo(request.query.returnTo ?? request.headers.referer, serverOrigin));
+    url.searchParams.set("autostart", request.query.autostart === "0" ? "0" : "1");
+    if (request.query.embed === "1") {
+      url.searchParams.set("embed", "1");
+    }
+
+    for (const key of ["action", "owner", "ownerWallet", "repo", "repoObjectId", "role", "walletAddress"] as const) {
+      const value = request.query[key];
+      if (typeof value === "string" && value.trim()) {
+        url.searchParams.set(key, value.trim());
+      }
+    }
+    if (config.suiPackageId) {
+      url.searchParams.set("packageId", config.suiPackageId);
+    }
+    if (config.accountRegistryId) {
+      url.searchParams.set("accountRegistryId", config.accountRegistryId);
+    }
+    if (config.repoRegistryId) {
+      url.searchParams.set("repoRegistryId", config.repoRegistryId);
+    }
+
     await reply
       .code(302)
-      .header("location", webLoginUrl(request, request.query.returnTo ?? request.headers.referer, {
-        embedded: request.query.embed === "1"
-      }))
+      .header("location", url.toString())
       .send();
   });
 
   app.post("/logout", async (request, reply) => {
-    const sessionId = parseCookies(request)[webSessionCookieName];
-    if (sessionId) {
-      webSessions.delete(sessionId);
-    }
-
     clearWebSessionCookie(reply, serverOriginForRequest(request).startsWith("https://"));
     const returnTo = normalizeReturnTo(request.headers.referer, requestOrigin(request));
     await reply.code(303).header("location", returnTo).send();
   });
 
+  app.post<{
+    Params: { owner: string; repo: string };
+  }>("/:owner/:repo/contributors", async (request, reply) => {
+    const state = await readSuiRepoState(config, request.params.owner, request.params.repo);
+    if (!state) {
+      throw httpError("Repository state not found", 404);
+    }
+
+    const auth = await requestAuthContext(request);
+    if (!auth) {
+      throw httpError("Sign in before managing contributors", 401);
+    }
+    if (!canManageRepoAccess(state, auth)) {
+      throw httpError("Only the repository owner can manage contributors", 403);
+    }
+
+    const body = requestBodyRecord(request.body);
+    const walletAddress = normalizedWalletAddress(body.walletAddress);
+    if (
+      walletAddress === state.ownerWallet.toLowerCase() ||
+      walletAddress === state.owner.toLowerCase()
+    ) {
+      throw httpError("The owner already has full repository access", 400);
+    }
+
+    const updated = await updateSuiRepoAccess(config, state, {
+      walletAddress,
+      role: accessRole(body.role),
+      action: accessAction(body.action)
+    });
+    await recordRepoAccessActivity(config, {
+      owner: state.owner,
+      repo: state.repo,
+      repoId: state.repoId,
+      walletAddress,
+      role: accessRole(body.role),
+      action: accessAction(body.action),
+      actorWalletAddress: auth.walletAddress,
+      createdAtMs: Date.now()
+    });
+
+    const isFormPost = typeof request.body === "string" ||
+      String(request.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded");
+    if (isFormPost) {
+      const returnTo = normalizeReturnTo(body.returnTo, requestOrigin(request));
+      await reply
+        .code(303)
+        .header("location", returnTo === "/" ? `/${encodeURIComponent(updated.owner)}/${encodeURIComponent(updated.repo)}` : returnTo)
+        .send();
+      return;
+    }
+
+    await reply.header("cache-control", "no-store").send({
+      repo: toRepoListItem(updated)
+    });
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+  }>("/v1/repos/:owner/:repo/activity", async (request) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    requireRepoContentAccess(request, state);
+    return {
+      repo: toRepoListItem(state),
+      activity: await listRepoActivity(config, state)
+    };
+  });
+
+  app.post<{
+    Params: { owner: string; repo: string };
+  }>("/v1/repos/:owner/:repo/access-transaction", async (request, reply) => {
+    const state = await readSuiRepoState(config, request.params.owner, request.params.repo);
+    if (!state) {
+      throw httpError("Repository state not found", 404);
+    }
+
+    const auth = await requestAuthContext(request);
+    if (!auth) {
+      throw httpError("Sign in before managing contributors", 401);
+    }
+    if (!canManageRepoAccess(state, auth)) {
+      throw httpError("Only the repository owner can manage contributors", 403);
+    }
+    if (!config.suiPackageId) {
+      throw httpError("SUI_PACKAGE_ID is required to build contributor transactions", 500);
+    }
+
+    const body = requestBodyRecord(request.body);
+    const walletAddress = normalizedWalletAddress(body.walletAddress);
+    if (
+      walletAddress === state.ownerWallet.toLowerCase() ||
+      walletAddress === state.owner.toLowerCase()
+    ) {
+      throw httpError("The owner already has full repository access", 400);
+    }
+
+    const tx = new Transaction();
+    tx.setSender(auth.walletAddress);
+    tx.moveCall({
+      target: `${config.suiPackageId}::registry::${repoAccessFunctionName(accessAction(body.action), accessRole(body.role))}`,
+      arguments: [
+        tx.object(state.repoObjectId),
+        tx.pure.address(walletAddress)
+      ]
+    });
+
+    await reply.header("cache-control", "no-store").send({
+      chain: `sui:${config.suiNetwork}`,
+      senderWallet: auth.walletAddress,
+      transactionJson: await tx.toJSON()
+    });
+  });
+
+  app.post<{
+    Params: { owner: string; repo: string };
+  }>("/v1/repos/:owner/:repo/activity/access", async (request, reply) => {
+    const state = await readSuiRepoState(config, request.params.owner, request.params.repo);
+    if (!state) {
+      throw httpError("Repository state not found", 404);
+    }
+
+    const auth = await requestAuthContext(request);
+    if (!auth) {
+      throw httpError("Sign in before recording contributor activity", 401);
+    }
+    if (!canManageRepoAccess(state, auth)) {
+      throw httpError("Only the repository owner can record contributor activity", 403);
+    }
+
+    const body = requestBodyRecord(request.body);
+    await recordRepoAccessActivity(config, {
+      owner: state.owner,
+      repo: state.repo,
+      repoId: state.repoId,
+      walletAddress: normalizedWalletAddress(body.walletAddress),
+      role: accessRole(body.role),
+      action: accessAction(body.action),
+      actorWalletAddress: auth.walletAddress,
+      txDigest: typeof body.txDigest === "string" && body.txDigest.trim() ? body.txDigest.trim() : undefined,
+      createdAtMs: Date.now()
+    });
+
+    await reply.header("cache-control", "no-store").send({ ok: true });
+  });
+
+  app.get<{
+    Params: { digest: string };
+  }>("/v1/sui/transactions/:digest/wait", async (request, reply) => {
+    const digest = request.params.digest.trim();
+    if (!digest) {
+      throw httpError("Missing transaction digest", 400);
+    }
+
+    const client = new SuiJsonRpcClient({
+      url: config.suiRpcUrl,
+      network: config.suiNetwork as "testnet"
+    });
+    const transaction = await client.waitForTransaction({ digest });
+    await reply.header("cache-control", "no-store").send({
+      ok: true,
+      digest,
+      transaction
+    });
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+  }>("/:owner/:repo/settings/access", async (request, reply) => {
+    const state = await authorizedHtmlRepoState(request, reply);
+    if (!state) {
+      return;
+    }
+
+    const auth = await requestAuthContext(request);
+    if (!auth) {
+      throw httpError("Sign in before managing contributors", 401);
+    }
+    if (!canManageRepoAccess(state, auth)) {
+      throw httpError("Only the repository owner can manage contributors", 403);
+    }
+
+    await reply.type("text/html; charset=utf-8").send(renderRepoAccessPage({
+      repo: await repoListItemWithCounts(state),
+      viewer: webViewerFromRequest(request, config) ?? { walletAddress: auth.walletAddress }
+    }));
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+  }>("/:owner/:repo/activity", async (request, reply) => {
+    const state = await authorizedHtmlRepoContentState(request, reply);
+    if (!state) {
+      return;
+    }
+
+    const activity = await listRepoActivity(config, state);
+    await reply.type("text/html; charset=utf-8").send(renderRepoActivityPage({
+      repo: await repoListItemWithCounts(state, { activity }),
+      activity,
+      viewer: webViewerFromRequest(request, config)
+    }));
+  });
+
   app.get("/", async (request, reply) => {
     const repos = await visibleRepoItems(request);
-    await reply.type("text/html; charset=utf-8").send(renderDashboardPage(repos, webViewerFromRequest(request)));
+    await reply.type("text/html; charset=utf-8").send(renderDashboardPage(repos, webViewerFromRequest(request, config)));
   });
 
   app.get("/v1/repos", async (request) => {
@@ -606,7 +1088,7 @@ export const buildServer = (config: ServerConfig) => {
     Params: { owner: string };
   }>("/:owner", async (request, reply) => {
     const repos = (await visibleRepoItems(request)).filter((repo) => repo.owner === request.params.owner);
-    await reply.type("text/html; charset=utf-8").send(renderProfilePage(request.params.owner, repos, webViewerFromRequest(request)));
+    await reply.type("text/html; charset=utf-8").send(renderProfilePage(request.params.owner, repos, webViewerFromRequest(request, config)));
   });
 
   app.get<{
@@ -690,6 +1172,50 @@ export const buildServer = (config: ServerConfig) => {
   });
 
   app.get<{
+    Params: { owner: string; repo: string };
+  }>("/v1/repos/:owner/:repo/pulls", async (request) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    requireRepoContentAccess(request, state);
+    return {
+      pullRequests: await listPullRequests(config, state.owner, state.repo)
+    };
+  });
+
+  app.post<{
+    Params: { owner: string; repo: string };
+  }>("/v1/repos/:owner/:repo/pulls", async (request, reply) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    requireRepoContentAccess(request, state);
+    const auth = await requestAuthContext(request);
+    if (!auth) {
+      throw httpError("Authentication is required to open a pull request", 401);
+    }
+    if (!canWriteRepo(state, auth)) {
+      throw httpError("Write access is required to open a pull request", 403);
+    }
+
+    const pullRequest = await createPullRequest(config, state, createPullRequestInput(request.body), auth);
+    await reply.code(201).send({ pullRequest });
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string; pull: string };
+  }>("/v1/repos/:owner/:repo/pulls/:pull", async (request) => {
+    const state = await authorizedRepoState(request, request.params.owner, request.params.repo);
+    requireRepoContentAccess(request, state);
+    const number = pullRequestNumber(request.params.pull);
+    const pullRequest = await readPullRequest(config, state.owner, state.repo, number);
+    if (!pullRequest) {
+      throw httpError("Pull request not found", 404);
+    }
+
+    return {
+      pullRequest,
+      comparison: await comparePullRequest(config, state, pullRequest)
+    };
+  });
+
+  app.get<{
     Querystring: { returnTo?: string };
   }>("/v1/auth/web-session/challenge", async (request, reply) => {
     cleanupWebAuth();
@@ -758,8 +1284,13 @@ export const buildServer = (config: ServerConfig) => {
       createdAtMs: now,
       expiresAtMs: now + webSessionTtlMs
     };
-    webSessions.set(sessionId, session);
-    setWebSessionCookie(reply, sessionId, session.expiresAtMs, serverOriginForRequest(request).startsWith("https://"));
+    setWebSessionCookie(
+      reply,
+      sessionId,
+      session,
+      config.webSessionSecret,
+      serverOriginForRequest(request).startsWith("https://")
+    );
 
     await reply.header("cache-control", "no-store").send({
       ok: true,
@@ -771,7 +1302,7 @@ export const buildServer = (config: ServerConfig) => {
   });
 
   app.get("/v1/auth/web-session", async (request, reply) => {
-    const session = webSessionFromRequest(request);
+    const session = webSessionFromRequest(request, config);
     await reply.header("cache-control", "no-store").send(session
       ? {
           authenticated: true,
@@ -789,7 +1320,7 @@ export const buildServer = (config: ServerConfig) => {
     Params: { owner: string; repo: string };
     Querystring: { returnTo?: string };
   }>("/v1/repos/:owner/:repo/unlock/challenge", async (request, reply) => {
-    const entry = webSessionEntryFromRequest(request);
+    const entry = webSessionEntryFromRequest(request, config);
     if (!entry) {
       throw httpError("Sign in with your wallet before unlocking this repository", 401);
     }
@@ -838,7 +1369,7 @@ export const buildServer = (config: ServerConfig) => {
   app.post<{
     Params: { owner: string; repo: string };
   }>("/v1/repos/:owner/:repo/unlock", async (request, reply) => {
-    const entry = webSessionEntryFromRequest(request);
+    const entry = webSessionEntryFromRequest(request, config);
     if (!entry) {
       throw httpError("Sign in with your wallet before unlocking this repository", 401);
     }
@@ -872,6 +1403,13 @@ export const buildServer = (config: ServerConfig) => {
     }
 
     entry.session.unlockedRepoIds.add(state.repoId);
+    setWebSessionCookie(
+      reply,
+      entry.sessionId,
+      entry.session,
+      config.webSessionSecret,
+      serverOriginForRequest(request).startsWith("https://")
+    );
     await reply.header("cache-control", "no-store").send({
       ok: true,
       repoId: state.repoId,
@@ -990,6 +1528,103 @@ export const buildServer = (config: ServerConfig) => {
 
   app.get<{
     Params: { owner: string; repo: string };
+  }>("/:owner/:repo/pulls", async (request, reply) => {
+    const state = await authorizedHtmlRepoContentState(request, reply);
+    if (!state) {
+      return;
+    }
+
+    const pullRequests = await listPullRequests(config, state.owner, state.repo);
+    await reply.type("text/html; charset=utf-8").send(renderPullRequestListPage({
+      repo: await repoListItemWithCounts(state, { pullRequests }),
+      pullRequests,
+      viewer: webViewerFromRequest(request, config)
+    }));
+  });
+
+  app.post<{
+    Params: { owner: string; repo: string };
+  }>("/:owner/:repo/pulls", async (request, reply) => {
+    const state = await authorizedHtmlRepoContentState(request, reply);
+    if (!state) {
+      return;
+    }
+
+    const auth = await requestAuthContext(request);
+    if (!auth) {
+      throw httpError("Sign in before opening a pull request", 401);
+    }
+    if (!canWriteRepo(state, auth)) {
+      throw httpError("Write access is required to open a pull request", 403);
+    }
+
+    const pullRequest = await createPullRequest(config, state, createPullRequestInput(request.body), auth);
+    const isFormPost = typeof request.body === "string" ||
+      String(request.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded");
+    if (isFormPost) {
+      await reply
+        .code(303)
+        .header("location", `/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repo)}/pulls/${pullRequest.number}`)
+        .send();
+      return;
+    }
+
+    await reply.code(201).send({ pullRequest });
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
+  }>("/:owner/:repo/pulls/new", async (request, reply) => {
+    const state = await authorizedHtmlRepoContentState(request, reply);
+    if (!state) {
+      return;
+    }
+
+    const auth = await requestAuthContext(request);
+    if (!auth) {
+      throw httpError("Sign in before opening a pull request", 401);
+    }
+    if (!canWriteRepo(state, auth)) {
+      throw httpError("Write access is required to open a pull request", 403);
+    }
+
+    await reply.type("text/html; charset=utf-8").send(renderPullRequestCreatePage({
+      repo: await repoListItemWithCounts(state),
+      viewer: webViewerFromRequest(request, config) ?? { walletAddress: auth.walletAddress }
+    }));
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string; pull: string };
+  }>("/:owner/:repo/pulls/:pull", async (request, reply) => {
+    const state = await authorizedHtmlRepoContentState(request, reply);
+    if (!state) {
+      return;
+    }
+
+    const number = pullRequestNumber(request.params.pull);
+    const pullRequest = await readPullRequest(config, state.owner, state.repo, number);
+    if (!pullRequest) {
+      throw httpError("Pull request not found", 404);
+    }
+
+    const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
+    const [comparison, commitActors] = await Promise.all([
+      comparePullRequest(config, state, pullRequest),
+      readCommitActors(config, state, repoPath)
+    ]);
+
+    await reply.type("text/html; charset=utf-8").send(renderPullRequestPage({
+      repo: await repoListItemWithCounts(state),
+      pullRequest,
+      comparison,
+      commitActors,
+      viewer: webViewerFromRequest(request, config)
+    }));
+  });
+
+  app.get<{
+    Params: { owner: string; repo: string };
     Querystring: { ref?: string; path?: string };
   }>("/:owner/:repo", async (request, reply) => {
     const state = await authorizedHtmlRepoContentState(request, reply);
@@ -1000,15 +1635,19 @@ export const buildServer = (config: ServerConfig) => {
     const ref = queryString(request.query.ref) ?? state.defaultBranch;
     const path = request.query.path ?? "";
     const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
+    const tree = await readTree(repoPath, ref, path);
+    const commits = await readCommits(repoPath, ref, 25);
     await reply.type("text/html; charset=utf-8").send(renderRepoPage({
-      repo: toRepoListItem(state),
+      repo: await repoListItemWithCounts(state, { index }),
       index,
-      commits: await readCommits(repoPath, ref, 25),
-      tree: await readTree(repoPath, ref, path),
+      commits,
+      tree,
+      readme: await readReadmePreview(repoPath, ref, path, tree),
       ref,
       path,
+      commitActors: await readCommitActors(config, state, repoPath),
       origin: requestOrigin(request),
-      viewer: webViewerFromRequest(request)
+      viewer: webViewerFromRequest(request, config)
     }));
   });
 
@@ -1024,12 +1663,14 @@ export const buildServer = (config: ServerConfig) => {
     const ref = queryString(request.query.ref) ?? state.defaultBranch;
     const limit = Math.max(1, Math.min(queryInt(request.query.limit, 100), 500));
     const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
+    const commits = await readCommits(repoPath, ref, limit);
     await reply.type("text/html; charset=utf-8").send(renderCommitsPage({
-      repo: toRepoListItem(state),
+      repo: await repoListItemWithCounts(state, { index }),
       index,
-      commits: await readCommits(repoPath, ref, limit),
+      commits,
       ref,
-      viewer: webViewerFromRequest(request)
+      commitActors: await readCommitActors(config, state, repoPath),
+      viewer: webViewerFromRequest(request, config)
     }));
   });
 
@@ -1046,15 +1687,19 @@ export const buildServer = (config: ServerConfig) => {
     const ref = queryString(request.query.ref) ?? state.defaultBranch;
     const path = request.query.path ?? "";
     const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
+    const tree = await readTree(repoPath, ref, path);
+    const commits = await readCommits(repoPath, ref, 25);
     await reply.type("text/html; charset=utf-8").send(renderRepoPage({
-      repo: toRepoListItem(state),
+      repo: await repoListItemWithCounts(state, { index }),
       index,
-      commits: await readCommits(repoPath, ref, 25),
-      tree: await readTree(repoPath, ref, path),
+      commits,
+      tree,
+      readme: await readReadmePreview(repoPath, ref, path, tree),
       ref,
       path,
+      commitActors: await readCommitActors(config, state, repoPath),
       origin: requestOrigin(request),
-      viewer: webViewerFromRequest(request)
+      viewer: webViewerFromRequest(request, config)
     }));
   });
 
@@ -1076,12 +1721,12 @@ export const buildServer = (config: ServerConfig) => {
     }
     const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
     await reply.type("text/html; charset=utf-8").send(renderBlobPage({
-      repo: toRepoListItem(state),
+      repo: await repoListItemWithCounts(state, { index }),
       index,
       commits: await readCommits(repoPath, ref, 25),
       ref,
       file: await readBlob(repoPath, ref, path),
-      viewer: webViewerFromRequest(request)
+      viewer: webViewerFromRequest(request, config)
     }));
   });
 
