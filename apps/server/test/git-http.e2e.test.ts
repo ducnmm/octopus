@@ -169,6 +169,9 @@ test("serves normal git push and clone through smart HTTP", async () => {
   });
 
   expect(createResponse.status).toBe(201);
+  await expect(
+    git(["--git-dir", join(dataDir, "repos", owner, "demo.git"), "symbolic-ref", "HEAD"])
+  ).resolves.toBe("refs/heads/main");
 
   const createdRepoListResponse = await fetch(new URL("/v1/repos", baseUrl));
   expect(createdRepoListResponse.status).toBe(200);
@@ -952,6 +955,9 @@ test("encrypts private push artifacts and requires auth for restore", async () =
     headers: delegateHeaders()
   });
   expect(restoreResponse.status).toBe(200);
+  await expect(
+    git(["--git-dir", join(dataDir, "repos", owner, "sealed-demo.git"), "symbolic-ref", "HEAD"])
+  ).resolves.toBe("refs/heads/main");
 
   await git([
     "-c",

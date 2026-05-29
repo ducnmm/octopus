@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import type { AuthContext } from "./auth.js";
 import { readRepoManifests, type PackManifest } from "./artifacts.js";
 import type { ServerConfig } from "./config.js";
-import { bareRepoPath } from "./git.js";
+import { bareRepoPath, setBareRepositoryHead } from "./git.js";
 import { decryptArtifactForRepo } from "./seal.js";
 import { readSuiRepoManifestsWithSource } from "./sui.js";
 import { readArtifact } from "./walrus.js";
@@ -151,6 +151,7 @@ export const restoreRepository = async (
     await mkdir(repoParent, { recursive: true });
     tempRepoPath = await mkdtemp(join(repoParent, `.${repo}.restore-`));
     await runGit(["clone", "--bare", bundlePath, tempRepoPath]);
+    await setBareRepositoryHead(tempRepoPath, manifest.refName);
     await runGit(["--git-dir", tempRepoPath, "config", "http.receivepack", "true"]);
     await runGit(["--git-dir", tempRepoPath, "config", "octopus.owner", owner]);
     await runGit(["--git-dir", tempRepoPath, "config", "octopus.name", repo]);

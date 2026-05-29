@@ -63,10 +63,36 @@ export const bareRepoPath = (repoRoot: string, owner: string, repo: string): str
   return path;
 };
 
+const defaultBranchRef = "refs/heads/main";
+
+const normalizeHeadRef = (refName?: string | null): string => {
+  if (!refName) {
+    return defaultBranchRef;
+  }
+
+  if (refName.startsWith("refs/heads/")) {
+    return refName;
+  }
+
+  if (!refName.startsWith("refs/")) {
+    return `refs/heads/${refName}`;
+  }
+
+  return defaultBranchRef;
+};
+
+export const setBareRepositoryHead = async (
+  repoPath: string,
+  refName?: string | null
+): Promise<void> => {
+  await runGit(["--git-dir", repoPath, "symbolic-ref", "HEAD", normalizeHeadRef(refName)]);
+};
+
 export const initBareRepository = async (
   repoRoot: string,
   owner: string,
-  repo: string
+  repo: string,
+  defaultBranch?: string
 ): Promise<string> => {
   const path = bareRepoPath(repoRoot, owner, repo);
   await mkdir(dirname(path), { recursive: true });
@@ -77,6 +103,7 @@ export const initBareRepository = async (
     await runGit(["init", "--bare", path]);
   }
 
+  await setBareRepositoryHead(path, defaultBranch);
   await runGit(["--git-dir", path, "config", "http.receivepack", "true"]);
   await runGit(["--git-dir", path, "config", "octopus.owner", owner]);
   await runGit(["--git-dir", path, "config", "octopus.name", repo]);
@@ -181,6 +208,8 @@ export const handleGitHttp = async (
   }
 
   const repoState = repoStateResult.state;
+  await setBareRepositoryHead(repoPath, repoState?.defaultBranch ?? defaultBranchRef);
+
   let auth: AuthContext | null = null;
 
   if (isReceivePackRequest) {
