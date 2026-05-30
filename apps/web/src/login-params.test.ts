@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { authPanelMode, browserFlowTarget, loginParamsFromSearch, type LoginRuntimeDefaults } from "./login-params.js";
 
 const defaults: LoginRuntimeDefaults = {
+  server: "http://127.0.0.1:48787",
   packageId: "0xpackage",
   accountRegistryId: "0xaccounts",
   repoRegistryId: "0xrepos"
@@ -14,6 +15,7 @@ describe("login params", () => {
     expect(authPanelMode(params.mode)).toBe("web");
     expect(params.autoStart).toBe(false);
     expect(params.embedded).toBe(false);
+    expect(params.server).toBe(defaults.server);
     expect(params.returnTo).toBe("/");
     expect(params.packageId).toBe(defaults.packageId);
     expect(params.accountRegistryId).toBe(defaults.accountRegistryId);

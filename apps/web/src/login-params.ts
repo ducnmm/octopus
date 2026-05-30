@@ -24,7 +24,7 @@ export type LoginParams = {
 
 export type LoginRuntimeDefaults = Pick<
   LoginParams,
-  "packageId" | "accountRegistryId" | "repoRegistryId"
+  "server" | "packageId" | "accountRegistryId" | "repoRegistryId"
 >;
 
 export type AuthPanelMode = "access" | "cli" | "web" | "unlock";
@@ -39,7 +39,7 @@ export const loginParamsFromSearch = (
     autoStart: params.get("autostart") === "1",
     embedded: params.get("embed") === "1",
     callback: params.get("callback") ?? "",
-    server: params.get("server") ?? "",
+    server: params.get("server") ?? defaults.server,
     returnTo: params.get("returnTo") ?? "/",
     owner: params.get("owner") ?? "",
     ownerWallet: params.get("ownerWallet") ?? "",
