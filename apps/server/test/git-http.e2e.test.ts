@@ -13,6 +13,14 @@ import type { ServerConfig } from "../src/config.js";
 
 const execFileAsync = promisify(execFile);
 
+const nonInteractiveGitEnv = (): NodeJS.ProcessEnv => ({
+  ...process.env,
+  GCM_INTERACTIVE: "never",
+  GIT_ASKPASS: "false",
+  GIT_TERMINAL_PROMPT: "0",
+  SSH_ASKPASS: "false"
+});
+
 let workspace: string;
 let dataDir: string;
 let baseUrl: string;
@@ -31,6 +39,7 @@ let gitAuthHeaders: Record<string, string>;
 const git = async (args: string[], cwd?: string): Promise<string> => {
   const { stdout } = await execFileAsync("git", args, {
     cwd,
+    env: nonInteractiveGitEnv(),
     maxBuffer: 1024 * 1024 * 10
   });
 
@@ -520,19 +529,26 @@ test("unauthorized push does not create manifests or mutate ref state", async ()
   await git(["remote", "add", "origin", remoteUrl], sourceRepo);
 
   await expect(
-    execFileAsync("git", ["push", "origin", "main"], {
+    execFileAsync("git", [
+      "-c",
+      "credential.helper=",
+      "-c",
+      "core.askPass=",
+      "push",
+      "origin",
+      "main"
+    ], {
       cwd: sourceRepo,
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0"
-      }
+      env: nonInteractiveGitEnv(),
+      maxBuffer: 1024 * 1024 * 10,
+      timeout: 5000
     })
   ).rejects.toBeTruthy();
 
   const state = await readSuiRepoState(config, owner, "unauthorized-demo");
   expect(state?.refs).toEqual({});
   expect(state?.manifests).toEqual([]);
-});
+}, 10_000);
 
 test("opens pull requests from pushed branches", async () => {
   const owner = delegate.address;
