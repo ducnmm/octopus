@@ -15,7 +15,7 @@ paths:
                 $ref: "#/components/schemas/HealthResponse"
   /v1/auth/config:
     get:
-      summary: Read server auth and Sui configuration for ocp login
+      summary: Read server auth and Sui configuration for wallet login
       responses:
         "200":
           description: Auth configuration
@@ -25,29 +25,73 @@ paths:
                 $ref: "#/components/schemas/AuthConfig"
   /v1/auth/delegate:
     post:
-      summary: Register a local-mode delegate key
+      summary: Register a local delegate key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterDelegateRequest"
       responses:
         "201":
           description: Delegate registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterDelegateResponse"
+        "409":
+          description: Server requires on-chain delegate registration
+  /v1/auth/web-session/challenge:
+    get:
+      summary: Create a wallet-signature challenge for a browser session
+      parameters:
+        - $ref: "#/components/parameters/ReturnTo"
+      responses:
+        "200":
+          description: Challenge created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebSessionChallenge"
+  /v1/auth/web-session:
+    get:
+      summary: Read the current browser session
+      responses:
+        "200":
+          description: Browser session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebSessionState"
+    post:
+      summary: Complete browser session login with a wallet signature
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebSessionRequest"
+      responses:
+        "200":
+          description: Browser session started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebSessionResponse"
   /v1/repos:
     get:
       summary: List repositories visible to the caller
       responses:
         "200":
-          description: Repository list
+          description: Visible repositories
           content:
             application/json:
               schema:
-                type: object
-                required:
-                  - repos
-                properties:
-                  repos:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/RepoListItem"
+                $ref: "#/components/schemas/RepoListResponse"
     post:
       summary: Create a repository
+      security:
+        - OctopusAuthToken: []
       requestBody:
         required: true
         content:
@@ -64,17 +108,11 @@ paths:
   /v1/repos/{owner}/{repo}/restore:
     post:
       summary: Restore a repository cache from Sui and Walrus
+      security:
+        - OctopusAuthToken: []
       parameters:
-        - name: owner
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: repo
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
       responses:
         "200":
           description: Repository cache restored
@@ -82,20 +120,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RestoreResponse"
+        "401":
+          description: Authentication is required
+        "403":
+          description: Caller cannot restore this repository
   /v1/repos/{owner}/{repo}/manifests:
     get:
-      summary: List local artifact manifests for a repository
+      summary: List artifact manifests for a repository
       parameters:
-        - name: owner
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: repo
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
       responses:
         "200":
           description: Artifact manifests
@@ -112,54 +146,109 @@ paths:
                       $ref: "#/components/schemas/PackManifest"
   /v1/repos/{owner}/{repo}/index:
     get:
-      summary: Read or build the repository index
+      summary: Read the repository index
       parameters:
         - $ref: "#/components/parameters/Owner"
         - $ref: "#/components/parameters/Repo"
       responses:
         "200":
           description: Repository index
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - index
+                properties:
+                  index:
+                    $ref: "#/components/schemas/RepoIndex"
     post:
-      summary: Force a repository reindex
+      summary: Rebuild the repository index
       parameters:
         - $ref: "#/components/parameters/Owner"
         - $ref: "#/components/parameters/Repo"
       responses:
         "202":
-          description: Repository reindexed
+          description: Index rebuild accepted
   /v1/repos/{owner}/{repo}/commits:
     get:
       summary: List commits for a ref
       parameters:
         - $ref: "#/components/parameters/Owner"
         - $ref: "#/components/parameters/Repo"
+        - $ref: "#/components/parameters/Ref"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
       responses:
         "200":
-          description: Commit list
+          description: Commits
   /v1/repos/{owner}/{repo}/tree:
     get:
       summary: List tree entries for a ref and path
       parameters:
         - $ref: "#/components/parameters/Owner"
         - $ref: "#/components/parameters/Repo"
+        - $ref: "#/components/parameters/Ref"
+        - $ref: "#/components/parameters/Path"
       responses:
         "200":
           description: Tree entries
   /v1/repos/{owner}/{repo}/blob:
     get:
-      summary: Read a file blob for a ref and path
+      summary: Read a file preview for a ref and path
       parameters:
         - $ref: "#/components/parameters/Owner"
         - $ref: "#/components/parameters/Repo"
-        - name: path
-          in: query
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/Ref"
+        - $ref: "#/components/parameters/Path"
       responses:
         "200":
-          description: File blob
+          description: File preview
+        "400":
+          description: File path is required
+  /v1/repos/{owner}/{repo}/unlock/challenge:
+    get:
+      summary: Create a wallet challenge to unlock private repository content in the browser
+      parameters:
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
+        - $ref: "#/components/parameters/ReturnTo"
+      responses:
+        "200":
+          description: Unlock challenge created or repository already unlocked
+  /v1/repos/{owner}/{repo}/unlock:
+    post:
+      summary: Complete private repository browser unlock
+      parameters:
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - nonce
+                - signature
+              properties:
+                nonce:
+                  type: string
+                signature:
+                  type: string
+      responses:
+        "200":
+          description: Repository unlocked for the current browser session
 components:
+  securitySchemes:
+    OctopusAuthToken:
+      type: apiKey
+      in: header
+      name: x-octopus-auth-token
   parameters:
     Owner:
       name: owner
@@ -171,6 +260,21 @@ components:
       name: repo
       in: path
       required: true
+      schema:
+        type: string
+    Ref:
+      name: ref
+      in: query
+      schema:
+        type: string
+    Path:
+      name: path
+      in: query
+      schema:
+        type: string
+    ReturnTo:
+      name: returnTo
+      in: query
       schema:
         type: string
   schemas:
@@ -186,10 +290,6 @@ components:
           type: string
     AuthConfig:
       type: object
-      required:
-        - suiMode
-        - suiNetwork
-        - suiRpcUrl
       properties:
         suiMode:
           type: string
@@ -199,6 +299,8 @@ components:
         suiNetwork:
           type: string
         suiRpcUrl:
+          type: string
+        webUrl:
           type: string
         packageId:
           type: string
@@ -213,12 +315,12 @@ components:
     CreateRepoRequest:
       type: object
       required:
-        - owner
         - name
       properties:
         owner:
           type: string
           pattern: "^[A-Za-z0-9._-]+$"
+          description: Optional SuiNS name ending in .sui or wallet address. Defaults to the authenticated wallet's primary SuiNS name, then wallet address.
         name:
           type: string
           pattern: "^[A-Za-z0-9._-]+$"
@@ -228,6 +330,137 @@ components:
             - public
             - private
           default: public
+    RegisterDelegateRequest:
+      type: object
+      required:
+        - walletAddress
+        - delegatePublicKey
+        - delegateAddress
+      properties:
+        walletAddress:
+          type: string
+        accountId:
+          type: string
+        delegatePublicKey:
+          type: string
+        delegateAddress:
+          type: string
+        label:
+          type: string
+          default: octopus-cli
+        packageId:
+          type: string
+        accountRegistryId:
+          type: string
+        repoRegistryId:
+          type: string
+    RegisterDelegateResponse:
+      type: object
+      required:
+        - accountId
+        - walletAddress
+        - delegateCount
+      properties:
+        accountId:
+          type: string
+        walletAddress:
+          type: string
+        delegateCount:
+          type: integer
+    WebSessionChallenge:
+      type: object
+      required:
+        - nonce
+        - message
+        - expiresAtMs
+      properties:
+        nonce:
+          type: string
+        message:
+          type: string
+        expiresAtMs:
+          type: integer
+    WebSessionRequest:
+      type: object
+      required:
+        - nonce
+        - walletAddress
+        - signature
+      properties:
+        nonce:
+          type: string
+        walletAddress:
+          type: string
+        accountId:
+          type: string
+        signature:
+          type: string
+    WebSessionResponse:
+      type: object
+      required:
+        - ok
+        - accountId
+        - walletAddress
+        - expiresAtMs
+        - returnTo
+      properties:
+        ok:
+          type: boolean
+        accountId:
+          type: string
+        walletAddress:
+          type: string
+        expiresAtMs:
+          type: integer
+        returnTo:
+          type: string
+    WebSessionState:
+      type: object
+      properties:
+        authenticated:
+          type: boolean
+        accountId:
+          type: string
+        walletAddress:
+          type: string
+        unlockedRepoIds:
+          type: array
+          items:
+            type: string
+        expiresAtMs:
+          type: integer
+    RepoListResponse:
+      type: object
+      required:
+        - repos
+      properties:
+        repos:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepoListItem"
+    RepoListItem:
+      allOf:
+        - $ref: "#/components/schemas/RepoSummary"
+        - type: object
+          properties:
+            repoId:
+              type: string
+            repoObjectId:
+              type: string
+            defaultBranch:
+              type: string
+            defaultBranchCommit:
+              type:
+                - string
+                - "null"
+            refCount:
+              type: integer
+            manifestCount:
+              type: integer
+            commitCount:
+              type: integer
+            updatedAtMs:
+              type: integer
     RepoSummary:
       type: object
       required:
@@ -255,25 +488,42 @@ components:
         repoObjectId:
           type: string
           description: Local registry mode uses local:{sha256-prefix}; live Sui will use an object ID.
-    RepoListItem:
-      allOf:
-        - $ref: "#/components/schemas/RepoSummary"
-        - type: object
-          properties:
-            repoId:
-              type: string
-            defaultBranchCommit:
-              type:
-                - string
-                - "null"
-            refCount:
-              type: integer
-            manifestCount:
-              type: integer
-            updatedAtMs:
-              type: integer
+    RepoIndex:
+      type: object
+      additionalProperties: true
+      required:
+        - version
+        - repoId
+        - owner
+        - repo
+        - defaultBranch
+        - commitCount
+        - treeEntryCount
+        - indexedAtMs
+      properties:
+        version:
+          type: integer
+        repoId:
+          type: string
+        owner:
+          type: string
+        repo:
+          type: string
+        defaultBranch:
+          type: string
+        headCommit:
+          type:
+            - string
+            - "null"
+        commitCount:
+          type: integer
+        treeEntryCount:
+          type: integer
+        indexedAtMs:
+          type: integer
     PackManifest:
       type: object
+      additionalProperties: true
       required:
         - manifestId
         - repoId
@@ -285,6 +535,9 @@ components:
         - artifactDigest
         - artifactSizeBytes
         - artifactPath
+        - storageMode
+        - visibility
+        - encrypted
         - isSnapshot
         - createdAtMs
         - seq
@@ -307,10 +560,12 @@ components:
           type: string
         walrusBlobId:
           type: string
-          description: Local fallback uses local:{sha256}; real Walrus will use a Walrus blob ID.
         walrusBlobObjectId:
           type: string
         artifactDigest:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+        storedArtifactDigest:
           type: string
           pattern: "^[a-f0-9]{64}$"
         artifactSizeBytes:
@@ -323,7 +578,14 @@ components:
           enum:
             - local
             - walrus-cli
-            - walrus-relay
+            - walrus-aggregator
+        visibility:
+          type: string
+          enum:
+            - public
+            - private
+        encrypted:
+          type: boolean
         isSnapshot:
           type: boolean
         createdAtMs:

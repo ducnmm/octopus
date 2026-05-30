@@ -1,4 +1,3 @@
-#[allow(lint(public_entry))]
 module octopus::registry {
     use std::string::String;
     use sui::bcs;
@@ -96,7 +95,7 @@ module octopus::registry {
         });
     }
 
-    public entry fun create_repo(
+    public fun create_repo(
         registry: &mut RepoRegistry,
         account: &mut OctopusAccount,
         repo_key: String,
@@ -140,7 +139,7 @@ module octopus::registry {
         transfer::share_object(repo);
     }
 
-    public entry fun add_member(repo: &mut Repo, writer: address, ctx: &TxContext) {
+    public fun add_member(repo: &mut Repo, writer: address, ctx: &TxContext) {
         assert_current_repo(repo);
         assert!(repo.owner == ctx.sender(), ENotWriter);
         if (!table::contains(&repo.writers, writer)) {
@@ -148,7 +147,7 @@ module octopus::registry {
         };
     }
 
-    public entry fun remove_member(repo: &mut Repo, writer: address, ctx: &TxContext) {
+    public fun remove_member(repo: &mut Repo, writer: address, ctx: &TxContext) {
         assert_current_repo(repo);
         assert!(repo.owner == ctx.sender(), ENotWriter);
         if (table::contains(&repo.writers, writer)) {
@@ -156,7 +155,7 @@ module octopus::registry {
         };
     }
 
-    public entry fun add_reader(repo: &mut Repo, reader: address, ctx: &TxContext) {
+    public fun add_reader(repo: &mut Repo, reader: address, ctx: &TxContext) {
         assert_current_repo(repo);
         assert!(repo.owner == ctx.sender(), ENotWriter);
         if (!table::contains(&repo.readers, reader)) {
@@ -164,7 +163,7 @@ module octopus::registry {
         };
     }
 
-    public entry fun remove_reader(repo: &mut Repo, reader: address, ctx: &TxContext) {
+    public fun remove_reader(repo: &mut Repo, reader: address, ctx: &TxContext) {
         assert_current_repo(repo);
         assert!(repo.owner == ctx.sender(), ENotWriter);
         if (table::contains(&repo.readers, reader)) {
@@ -172,20 +171,20 @@ module octopus::registry {
         };
     }
 
-    public entry fun set_visibility(repo: &mut Repo, visibility: u8, ctx: &TxContext) {
+    public fun set_visibility(repo: &mut Repo, visibility: u8, ctx: &TxContext) {
         assert_current_repo(repo);
         assert!(repo.owner == ctx.sender(), ENotWriter);
         assert!(visibility == VISIBILITY_PUBLIC || visibility == VISIBILITY_PRIVATE, EInvalidVisibility);
         repo.visibility = visibility;
     }
 
-    public entry fun set_default_branch(repo: &mut Repo, default_branch: String, ctx: &TxContext) {
+    public fun set_default_branch(repo: &mut Repo, default_branch: String, ctx: &TxContext) {
         assert_current_repo(repo);
         assert!(repo.owner == ctx.sender(), ENotWriter);
         repo.default_branch = default_branch;
     }
 
-    public entry fun push_ref(
+    public fun push_ref(
         repo: &mut Repo,
         account: &OctopusAccount,
         ref_name: String,
@@ -278,7 +277,7 @@ module octopus::registry {
         }
     }
 
-    public entry fun seal_approve(
+    public fun seal_approve(
         id: vector<u8>,
         repo: &Repo,
         account: &OctopusAccount,
@@ -333,5 +332,199 @@ module octopus::registry {
 
     public fun repo_next_seq(repo: &Repo): u64 {
         repo.next_seq
+    }
+
+    #[test_only]
+    fun new_registry_for_testing(ctx: &mut TxContext): RepoRegistry {
+        RepoRegistry {
+            id: object::new(ctx),
+            version: VERSION,
+            repos: table::new(ctx),
+        }
+    }
+
+    #[test_only]
+    fun new_repo_for_testing(owner: address, visibility: u8, ctx: &mut TxContext): Repo {
+        Repo {
+            id: object::new(ctx),
+            version: VERSION,
+            repo_id: std::string::utf8(b"owner/repo"),
+            owner,
+            name: std::string::utf8(b"repo"),
+            visibility,
+            default_branch: std::string::utf8(b"main"),
+            refs: table::new(ctx),
+            manifests: table::new(ctx),
+            readers: table::new(ctx),
+            writers: table::new(ctx),
+            next_seq: 1,
+            active: true,
+            created_at_ms: ctx.epoch_timestamp_ms(),
+        }
+    }
+
+    #[test_only]
+    fun destroy_registry_for_testing(registry: RepoRegistry) {
+        let RepoRegistry { id, version: _, repos } = registry;
+        repos.destroy_empty();
+        id.delete();
+    }
+
+    #[test_only]
+    fun destroy_repo_for_testing(repo: Repo) {
+        let Repo {
+            id,
+            version: _,
+            repo_id: _,
+            owner: _,
+            name: _,
+            visibility: _,
+            default_branch: _,
+            refs,
+            manifests,
+            readers,
+            writers,
+            next_seq: _,
+            active: _,
+            created_at_ms: _,
+        } = repo;
+        refs.destroy_empty();
+        manifests.destroy_empty();
+        readers.destroy_empty();
+        writers.destroy_empty();
+        id.delete();
+    }
+
+    #[test_only]
+    fun push_main_ref(
+        repo: &mut Repo,
+        account: &OctopusAccount,
+        expected_old_commit: String,
+        new_commit: String,
+        artifact_digest: String,
+        ctx: &mut TxContext,
+    ) {
+        push_ref(
+            repo,
+            account,
+            std::string::utf8(b"refs/heads/main"),
+            expected_old_commit,
+            new_commit,
+            std::string::utf8(b"walrus-blob"),
+            std::string::utf8(b"walrus-object"),
+            artifact_digest,
+            42,
+            std::string::utf8(b"base-manifest"),
+            std::string::utf8(b"parent-manifest"),
+            true,
+            ctx,
+        );
+    }
+
+    #[test]
+    fun create_repo_registers_repo_and_increments_account() {
+        let mut ctx = tx_context::dummy();
+        let owner = ctx.sender();
+        let mut registry = new_registry_for_testing(&mut ctx);
+        let mut account = account::new_account_for_testing(owner, &mut ctx);
+
+        create_repo(
+            &mut registry,
+            &mut account,
+            std::string::utf8(b"owner/repo"),
+            std::string::utf8(b"repo"),
+            VISIBILITY_PRIVATE,
+            std::string::utf8(b"main"),
+            &mut ctx,
+        );
+
+        assert!(table::contains(&registry.repos, std::string::utf8(b"owner/repo")), 0);
+        assert!(account::repo_count(&account) == 1, 0);
+
+        transfer::share_object(registry);
+        account::destroy_account_for_testing(account);
+    }
+
+    #[test]
+    fun readers_and_writers_control_private_repo_access() {
+        let mut ctx = tx_context::dummy();
+        let owner = ctx.sender();
+        let writer = @0xB0B;
+        let reader = @0xC0D;
+        let mut repo = new_repo_for_testing(owner, VISIBILITY_PRIVATE, &mut ctx);
+        let account = account::new_account_for_testing(owner, &mut ctx);
+
+        assert!(can_read(&repo, &account, owner), 0);
+        assert!(!can_read(&repo, &account, writer), 0);
+        assert!(!can_read(&repo, &account, reader), 0);
+
+        add_member(&mut repo, writer, &ctx);
+        assert!(can_read(&repo, &account, writer), 0);
+        remove_member(&mut repo, writer, &ctx);
+        assert!(!can_read(&repo, &account, writer), 0);
+
+        add_reader(&mut repo, reader, &ctx);
+        assert!(can_read(&repo, &account, reader), 0);
+        remove_reader(&mut repo, reader, &ctx);
+        assert!(!can_read(&repo, &account, reader), 0);
+
+        destroy_repo_for_testing(repo);
+        account::destroy_account_for_testing(account);
+    }
+
+    #[test]
+    fun push_ref_updates_ref_and_manifest_sequence() {
+        let mut ctx = tx_context::dummy();
+        let owner = ctx.sender();
+        let mut repo = new_repo_for_testing(owner, VISIBILITY_PRIVATE, &mut ctx);
+        let account = account::new_account_for_testing(owner, &mut ctx);
+
+        push_main_ref(
+            &mut repo,
+            &account,
+            std::string::utf8(b""),
+            std::string::utf8(b"commit-1"),
+            std::string::utf8(b"artifact-1"),
+            &mut ctx,
+        );
+
+        let ref_name = std::string::utf8(b"refs/heads/main");
+        let ref_state = table::borrow(&repo.refs, ref_name);
+        let manifest = table::borrow(&repo.manifests, 1);
+
+        assert!(ref_state.commit_digest == std::string::utf8(b"commit-1"), 0);
+        assert!(ref_state.seq == 1, 0);
+        assert!(manifest.new_commit == std::string::utf8(b"commit-1"), 0);
+        assert!(repo_next_seq(&repo) == 2, 0);
+
+        let _ = table::remove(&mut repo.refs, ref_name);
+        let _ = table::remove(&mut repo.manifests, 1);
+        destroy_repo_for_testing(repo);
+        account::destroy_account_for_testing(account);
+    }
+
+    #[test]
+    fun seal_approval_requires_reader_access() {
+        let mut ctx = tx_context::dummy();
+        let owner = ctx.sender();
+        let reader = @0xC0D;
+        let mut repo = new_repo_for_testing(owner, VISIBILITY_PRIVATE, &mut ctx);
+        let account = account::new_account_for_testing(owner, &mut ctx);
+        let key_id = seal_key_id(&repo);
+
+        add_reader(&mut repo, reader, &ctx);
+        assert!(can_read(&repo, &account, reader), 0);
+        seal_approve(key_id, &repo, &account, &ctx);
+
+        remove_reader(&mut repo, reader, &ctx);
+        destroy_repo_for_testing(repo);
+        account::destroy_account_for_testing(account);
+    }
+
+    #[test]
+    fun repo_registry_test_helper_starts_empty() {
+        let mut ctx = tx_context::dummy();
+        let registry = new_registry_for_testing(&mut ctx);
+        destroy_registry_for_testing(registry);
     }
 }

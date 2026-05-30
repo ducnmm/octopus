@@ -1,4 +1,3 @@
-#[allow(lint(public_entry))]
 module octopus::account {
     use std::string::String;
     use sui::event;
@@ -68,7 +67,7 @@ module octopus::account {
         });
     }
 
-    public entry fun create_account(registry: &mut AccountRegistry, ctx: &mut TxContext) {
+    public fun create_account(registry: &mut AccountRegistry, ctx: &mut TxContext) {
         assert!(registry.version == VERSION, EWrongVersion);
         let sender = ctx.sender();
         assert!(!table::contains(&registry.accounts, sender), EAccountAlreadyExists);
@@ -88,7 +87,7 @@ module octopus::account {
         transfer::share_object(account);
     }
 
-    public entry fun add_delegate_key(
+    public fun add_delegate_key(
         account: &mut OctopusAccount,
         registry: &mut AccountRegistry,
         public_key: vector<u8>,
@@ -125,7 +124,7 @@ module octopus::account {
         });
     }
 
-    public entry fun remove_delegate_key(
+    public fun remove_delegate_key(
         account: &mut OctopusAccount,
         registry: &mut AccountRegistry,
         sui_address: address,
@@ -196,5 +195,102 @@ module octopus::account {
 
     public fun repo_count(account: &OctopusAccount): u64 {
         account.repo_count
+    }
+
+    #[test_only]
+    public(package) fun new_registry_for_testing(ctx: &mut TxContext): AccountRegistry {
+        AccountRegistry {
+            id: object::new(ctx),
+            version: VERSION,
+            accounts: table::new(ctx),
+            delegate_accounts: table::new(ctx),
+        }
+    }
+
+    #[test_only]
+    public(package) fun new_account_for_testing(owner: address, ctx: &mut TxContext): OctopusAccount {
+        OctopusAccount {
+            id: object::new(ctx),
+            version: VERSION,
+            owner,
+            delegate_keys: vector::empty(),
+            repo_count: 0,
+            created_at_ms: ctx.epoch_timestamp_ms(),
+        }
+    }
+
+    #[test_only]
+    public(package) fun destroy_registry_for_testing(registry: AccountRegistry) {
+        let AccountRegistry { id, version: _, accounts, delegate_accounts } = registry;
+        accounts.destroy_empty();
+        delegate_accounts.destroy_empty();
+        id.delete();
+    }
+
+    #[test_only]
+    public(package) fun destroy_account_for_testing(account: OctopusAccount) {
+        let OctopusAccount {
+            id,
+            version: _,
+            owner: _,
+            delegate_keys: _,
+            repo_count: _,
+            created_at_ms: _,
+        } = account;
+        id.delete();
+    }
+
+    #[test_only]
+    fun test_public_key(byte: u8): vector<u8> {
+        let mut key = vector::empty<u8>();
+        let mut i = 0;
+        while (i < ED25519_PUBLIC_KEY_LENGTH) {
+            key.push_back(byte);
+            i = i + 1;
+        };
+        key
+    }
+
+    #[test]
+    fun create_account_indexes_sender() {
+        let mut ctx = tx_context::dummy();
+        let sender = ctx.sender();
+        let mut registry = new_registry_for_testing(&mut ctx);
+
+        create_account(&mut registry, &mut ctx);
+
+        assert!(table::contains(&registry.accounts, sender), 0);
+        transfer::share_object(registry);
+    }
+
+    #[test]
+    fun delegate_key_lifecycle_updates_account_and_registry() {
+        let mut ctx = tx_context::dummy();
+        let owner = ctx.sender();
+        let delegate = @0xD1;
+        let mut registry = new_registry_for_testing(&mut ctx);
+        let mut account = new_account_for_testing(owner, &mut ctx);
+
+        add_delegate_key(
+            &mut account,
+            &mut registry,
+            test_public_key(7),
+            delegate,
+            std::string::utf8(b"cli"),
+            &ctx,
+        );
+
+        assert!(is_registered_delegate(&account, delegate), 0);
+        assert!(can_manage_account(&account, delegate), 0);
+        assert!(table::contains(&registry.delegate_accounts, delegate), 0);
+
+        remove_delegate_key(&mut account, &mut registry, delegate, &ctx);
+
+        assert!(!is_registered_delegate(&account, delegate), 0);
+        assert!(!can_manage_account(&account, delegate), 0);
+        assert!(!table::contains(&registry.delegate_accounts, delegate), 0);
+
+        destroy_account_for_testing(account);
+        destroy_registry_for_testing(registry);
     }
 }

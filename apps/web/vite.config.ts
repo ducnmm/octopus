@@ -7,5 +7,19 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   envDir: resolve(here, "../.."),
-  plugins: [react()]
+  plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("/node_modules/@mysten/")) {
+            return "mysten";
+          }
+          if (id.includes("/node_modules/react") || id.includes("/node_modules/scheduler")) {
+            return "react";
+          }
+        }
+      }
+    }
+  }
 });

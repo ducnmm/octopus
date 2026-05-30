@@ -75,7 +75,7 @@ const signedDelegateHeaders = async (scope: "rest" | "git"): Promise<Record<stri
 
 const delegateHeaders = (): Record<string, string> => restAuthHeaders;
 
-const registerDelegate = async (walletAddress = "ducnmm"): Promise<void> => {
+const registerDelegate = async (walletAddress = delegate.address): Promise<void> => {
   const registerResponse = await fetch(new URL("/v1/auth/delegate", baseUrl), {
     method: "POST",
     headers: {
@@ -91,6 +91,27 @@ const registerDelegate = async (walletAddress = "ducnmm"): Promise<void> => {
   expect(registerResponse.status).toBe(201);
 };
 
+const createWebSessionCookie = async (returnTo = "/"): Promise<string> => {
+  const challengeResponse = await fetch(new URL(`/v1/auth/web-session/challenge?returnTo=${encodeURIComponent(returnTo)}`, baseUrl));
+  expect(challengeResponse.status).toBe(200);
+  const challenge = (await challengeResponse.json()) as { nonce: string; message: string };
+  const { signature } = await delegateKeypair.signPersonalMessage(Buffer.from(challenge.message, "utf8"));
+  const webSessionResponse = await fetch(new URL("/v1/auth/web-session", baseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      nonce: challenge.nonce,
+      walletAddress: delegate.address,
+      accountId: delegate.accountId,
+      signature
+    })
+  });
+  expect(webSessionResponse.status).toBe(200);
+  const cookie = webSessionResponse.headers.get("set-cookie")?.split(";")[0];
+  expect(cookie).toBeTruthy();
+  return cookie ?? "";
+};
+
 beforeEach(async () => {
   workspace = await mkdtemp(join(tmpdir(), "octopus-server-"));
   dataDir = join(workspace, "data");
@@ -99,6 +120,7 @@ beforeEach(async () => {
     port: 0,
     dataDir,
     repoRoot: join(dataDir, "repos"),
+    webUrl: "http://127.0.0.1:45173",
     suiMode: "local",
     suiNetwork: "localnet",
     suiRpcUrl: "http://127.0.0.1:9000",
@@ -106,6 +128,7 @@ beforeEach(async () => {
     serverSuiPrivateKeys: [],
     sealMode: "local",
     sealKeyServers: [],
+    webSessionSecret: "test-web-session-secret",
     delegateCacheTtlMs: 60_000
   };
   server = buildServer(config);
@@ -135,6 +158,10 @@ afterEach(async () => {
 });
 
 test("serves normal git push and clone through smart HTTP", async () => {
+  const owner = delegate.address;
+  const repoId = `${owner}/demo`;
+  const remotePath = `/${owner}/demo.git`;
+  const remoteUrl = `${baseUrl}${remotePath}`;
   const emptyRepoListResponse = await fetch(new URL("/v1/repos", baseUrl));
   expect(emptyRepoListResponse.status).toBe(200);
   await expect(emptyRepoListResponse.json()).resolves.toEqual({ repos: [] });
@@ -148,13 +175,15 @@ test("serves normal git push and clone through smart HTTP", async () => {
       ...delegateHeaders()
     },
     body: JSON.stringify({
-      owner: "ducnmm",
       name: "demo",
       visibility: "public"
     })
   });
 
   expect(createResponse.status).toBe(201);
+  await expect(
+    git(["--git-dir", join(dataDir, "repos", owner, "demo.git"), "symbolic-ref", "HEAD"])
+  ).resolves.toBe("refs/heads/main");
 
   const createdRepoListResponse = await fetch(new URL("/v1/repos", baseUrl));
   expect(createdRepoListResponse.status).toBe(200);
@@ -172,11 +201,11 @@ test("serves normal git push and clone through smart HTTP", async () => {
   };
   expect(createdRepoListBody.repos).toHaveLength(1);
   expect(createdRepoListBody.repos[0]).toMatchObject({
-    owner: "ducnmm",
+    owner,
     name: "demo",
-    repoId: "ducnmm/demo",
+    repoId,
     visibility: "public",
-    gitRemotePath: "/ducnmm/demo.git",
+    gitRemotePath: remotePath,
     defaultBranchCommit: null,
     refCount: 0,
     manifestCount: 0
@@ -192,17 +221,17 @@ test("serves normal git push and clone through smart HTTP", async () => {
   await git(["add", "README.md"], sourceRepo);
   await git(["commit", "-m", "initial commit"], sourceRepo);
   await git(["branch", "-M", "main"], sourceRepo);
-  await git(["remote", "add", "origin", `${baseUrl}/ducnmm/demo.git`], sourceRepo);
-  await storeGitCredential(sourceRepo, `${baseUrl}/ducnmm/demo.git`, gitAuthHeaders[delegateAuthHeaders.token]!);
+  await git(["remote", "add", "origin", remoteUrl], sourceRepo);
+  await storeGitCredential(sourceRepo, remoteUrl, gitAuthHeaders[delegateAuthHeaders.token]!);
   await git(["push", "origin", "main"], sourceRepo);
 
-  await git(["clone", `${baseUrl}/ducnmm/demo.git`, cloneRepo]);
+  await git(["clone", remoteUrl, cloneRepo]);
 
   const pushedCommit = await git(["rev-parse", "HEAD"], sourceRepo);
   const clonedCommit = await git(["rev-parse", "HEAD"], cloneRepo);
   expect(clonedCommit).toBe(pushedCommit);
 
-  const manifestResponse = await fetch(new URL("/v1/repos/ducnmm/demo/manifests", baseUrl));
+  const manifestResponse = await fetch(new URL(`/v1/repos/${owner}/demo/manifests`, baseUrl));
   expect(manifestResponse.status).toBe(200);
   const manifestBody = (await manifestResponse.json()) as {
     manifests: Array<{
@@ -212,6 +241,7 @@ test("serves normal git push and clone through smart HTTP", async () => {
       walrusBlobId: string;
       artifactDigest: string;
       artifactPath: string;
+      actorWalletAddress?: string;
       storageMode: "local" | "walrus-cli" | "walrus-relay";
       isSnapshot: boolean;
       seq: number;
@@ -224,6 +254,7 @@ test("serves normal git push and clone through smart HTTP", async () => {
     refName: "refs/heads/main",
     oldCommit: null,
     newCommit: pushedCommit,
+    actorWalletAddress: delegate.address,
     storageMode: "local",
     isSnapshot: true,
     seq: 1
@@ -241,7 +272,7 @@ test("serves normal git push and clone through smart HTTP", async () => {
     }>;
   };
   expect(pushedRepoListBody.repos[0]).toMatchObject({
-    repoId: "ducnmm/demo",
+    repoId,
     defaultBranchCommit: pushedCommit,
     refCount: 1,
     manifestCount: 1
@@ -251,11 +282,17 @@ test("serves normal git push and clone through smart HTTP", async () => {
   expect(webResponse.status).toBe(200);
   expect(webResponse.headers.get("content-type")).toContain("text/html");
   const webBody = await webResponse.text();
-  expect(webBody).toContain("Octopus Repositories");
-  expect(webBody).toContain("ducnmm/demo");
-  expect(webBody).toContain(pushedCommit.slice(0, 12));
+  expect(webBody).toContain("Home");
+  expect(webBody).toContain(repoId);
+  expect(webBody).toContain("1 commit");
 
-  const indexResponse = await fetch(new URL("/v1/repos/ducnmm/demo/index", baseUrl));
+  const profileResponse = await fetch(new URL(`/${owner}`, baseUrl));
+  expect(profileResponse.status).toBe(200);
+  const profileBody = await profileResponse.text();
+  expect(profileBody).toContain("Contribution activity");
+  expect(profileBody).toContain("Created 1 commit in 1 repository");
+
+  const indexResponse = await fetch(new URL(`/v1/repos/${owner}/demo/index`, baseUrl));
   expect(indexResponse.status).toBe(200);
   const indexBody = (await indexResponse.json()) as {
     index: {
@@ -267,7 +304,7 @@ test("serves normal git push and clone through smart HTTP", async () => {
     };
   };
   expect(indexBody.index).toMatchObject({
-    repoId: "ducnmm/demo",
+    repoId,
     headCommit: pushedCommit,
     commitCount: 1,
     treeEntryCount: 1
@@ -277,7 +314,7 @@ test("serves normal git push and clone through smart HTTP", async () => {
     type: "blob"
   });
 
-  const commitsResponse = await fetch(new URL("/v1/repos/ducnmm/demo/commits", baseUrl));
+  const commitsResponse = await fetch(new URL(`/v1/repos/${owner}/demo/commits`, baseUrl));
   expect(commitsResponse.status).toBe(200);
   const commitsBody = (await commitsResponse.json()) as {
     commits: Array<{ oid: string; subject: string }>;
@@ -287,7 +324,7 @@ test("serves normal git push and clone through smart HTTP", async () => {
     subject: "initial commit"
   });
 
-  const treeResponse = await fetch(new URL("/v1/repos/ducnmm/demo/tree", baseUrl));
+  const treeResponse = await fetch(new URL(`/v1/repos/${owner}/demo/tree`, baseUrl));
   expect(treeResponse.status).toBe(200);
   const treeBody = (await treeResponse.json()) as {
     entries: Array<{ path: string; type: string; size: number }>;
@@ -298,7 +335,7 @@ test("serves normal git push and clone through smart HTTP", async () => {
     size: "hello octopus\n".length
   });
 
-  const blobResponse = await fetch(new URL("/v1/repos/ducnmm/demo/blob?path=README.md", baseUrl));
+  const blobResponse = await fetch(new URL(`/v1/repos/${owner}/demo/blob?path=README.md`, baseUrl));
   expect(blobResponse.status).toBe(200);
   const blobBody = (await blobResponse.json()) as {
     file: { path: string; encoding: string; content: string };
@@ -309,19 +346,29 @@ test("serves normal git push and clone through smart HTTP", async () => {
     content: "hello octopus\n"
   });
 
-  const repoPageResponse = await fetch(new URL("/ducnmm/demo", baseUrl));
+  const repoPageResponse = await fetch(new URL(`/${owner}/demo`, baseUrl));
   expect(repoPageResponse.status).toBe(200);
   const repoPage = await repoPageResponse.text();
+  const shortOwner = `${owner.slice(0, 6)}...${owner.slice(-4)}`;
   expect(repoPage).toContain("README.md");
-  expect(repoPage).toContain("initial commit");
+  expect(repoPage).toContain("1 commits");
+  expect(repoPage).toContain(shortOwner);
+  expect(repoPage).not.toContain("Octopus Test</strong>");
+  expect(repoPage).toContain("entry-icon file");
+  expect(repoPage).toContain("Copy clone command");
+  expect(repoPage).toContain(`data-copy-text="git clone ${baseUrl}/${owner}/demo.git"`);
+  expect(repoPage).toContain("<h2>About</h2>");
+  expect(repoPage).toContain("No description, website, or topics provided.");
+  expect(repoPage).toContain("readme-panel");
+  expect(repoPage).toContain("hello octopus");
 
-  const filePageResponse = await fetch(new URL("/ducnmm/demo/blob?path=README.md", baseUrl));
+  const filePageResponse = await fetch(new URL(`/${owner}/demo/blob?path=README.md`, baseUrl));
   expect(filePageResponse.status).toBe(200);
   await expect(filePageResponse.text()).resolves.toContain("hello octopus");
 
   const suiState = await readSuiRepoState(
     config,
-    "ducnmm",
+    owner,
     "demo"
   );
   expect(suiState?.registryMode).toBe("local");
@@ -338,17 +385,23 @@ test("serves normal git push and clone through smart HTTP", async () => {
   await expect(stat(join(dataDir, "walrus", "blobs", `${manifest?.artifactDigest}.bundle`))).resolves.toBeTruthy();
   await git(["bundle", "verify", manifest!.artifactPath], sourceRepo);
 
-  await rm(join(dataDir, "repos", "ducnmm", "demo.git"), { force: true, recursive: true });
+  await rm(join(dataDir, "repos", owner, "demo.git"), { force: true, recursive: true });
 
-  const restoreResponse = await fetch(new URL("/v1/repos/ducnmm/demo/restore", baseUrl), {
+  const unauthorizedPublicRestore = await fetch(new URL(`/v1/repos/${owner}/demo/restore`, baseUrl), {
     method: "POST"
+  });
+  expect(unauthorizedPublicRestore.status).toBe(401);
+
+  const restoreResponse = await fetch(new URL(`/v1/repos/${owner}/demo/restore`, baseUrl), {
+    method: "POST",
+    headers: delegateHeaders()
   });
   expect(restoreResponse.status).toBe(200);
   const restoreBody = (await restoreResponse.json()) as {
     manifestId: string;
     restoredCommit: string;
     artifactDigest: string;
-    storageMode: "local" | "walrus-cli" | "walrus-relay";
+    storageMode: "local" | "walrus-cli" | "walrus-aggregator";
     manifestSource: "sui-local" | "artifact-fallback";
   };
   expect(restoreBody).toMatchObject({
@@ -359,18 +412,20 @@ test("serves normal git push and clone through smart HTTP", async () => {
     manifestSource: "sui-local"
   });
 
-  await git(["clone", `${baseUrl}/ducnmm/demo.git`, restoredCloneRepo]);
+  await git(["clone", remoteUrl, restoredCloneRepo]);
   const restoredClonedCommit = await git(["rev-parse", "HEAD"], restoredCloneRepo);
   expect(restoredClonedCommit).toBe(pushedCommit);
 
-  await rm(join(dataDir, "repos", "ducnmm", "demo.git"), { force: true, recursive: true });
+  await rm(join(dataDir, "repos", owner, "demo.git"), { force: true, recursive: true });
   const autoRestoredCloneRepo = join(workspace, "auto-restored-clone");
-  await git(["clone", `${baseUrl}/ducnmm/demo.git`, autoRestoredCloneRepo]);
+  await git(["clone", remoteUrl, autoRestoredCloneRepo]);
   const autoRestoredClonedCommit = await git(["rev-parse", "HEAD"], autoRestoredCloneRepo);
   expect(autoRestoredClonedCommit).toBe(pushedCommit);
 });
 
 test("supports common branch and tag ref workflows through smart HTTP", async () => {
+  const owner = delegate.address;
+  const remoteUrl = `${baseUrl}/${owner}/refs-demo.git`;
   await registerDelegate();
   const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
     method: "POST",
@@ -379,7 +434,6 @@ test("supports common branch and tag ref workflows through smart HTTP", async ()
       ...delegateHeaders()
     },
     body: JSON.stringify({
-      owner: "ducnmm",
       name: "refs-demo",
       visibility: "public"
     })
@@ -388,7 +442,6 @@ test("supports common branch and tag ref workflows through smart HTTP", async ()
 
   const sourceRepo = join(workspace, "refs-source");
   const cloneRepo = join(workspace, "refs-clone");
-  const remoteUrl = `${baseUrl}/ducnmm/refs-demo.git`;
   await git(["init", sourceRepo]);
   await git(["config", "user.email", "test@octopus.local"], sourceRepo);
   await git(["config", "user.name", "Octopus Test"], sourceRepo);
@@ -433,13 +486,15 @@ test("supports common branch and tag ref workflows through smart HTTP", async ()
   await git(["push", "origin", ":feature"], sourceRepo);
   await git(["push", "origin", ":refs/tags/v1"], sourceRepo);
 
-  const state = await readSuiRepoState(config, "ducnmm", "refs-demo");
+  const state = await readSuiRepoState(config, owner, "refs-demo");
   expect(state?.refs["refs/heads/main"]?.commitDigest).toBe(await git(["rev-parse", "main"], sourceRepo));
   expect(state?.refs["refs/heads/feature"]).toBeUndefined();
   expect(state?.refs["refs/tags/v1"]).toBeUndefined();
 });
 
 test("unauthorized push does not create manifests or mutate ref state", async () => {
+  const owner = delegate.address;
+  const remoteUrl = `${baseUrl}/${owner}/unauthorized-demo.git`;
   await registerDelegate();
   const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
     method: "POST",
@@ -448,7 +503,6 @@ test("unauthorized push does not create manifests or mutate ref state", async ()
       ...delegateHeaders()
     },
     body: JSON.stringify({
-      owner: "ducnmm",
       name: "unauthorized-demo",
       visibility: "public"
     })
@@ -456,7 +510,6 @@ test("unauthorized push does not create manifests or mutate ref state", async ()
   expect(createResponse.status).toBe(201);
 
   const sourceRepo = join(workspace, "unauthorized-source");
-  const remoteUrl = `${baseUrl}/ducnmm/unauthorized-demo.git`;
   await git(["init", sourceRepo]);
   await git(["config", "user.email", "test@octopus.local"], sourceRepo);
   await git(["config", "user.name", "Octopus Test"], sourceRepo);
@@ -476,12 +529,14 @@ test("unauthorized push does not create manifests or mutate ref state", async ()
     })
   ).rejects.toBeTruthy();
 
-  const state = await readSuiRepoState(config, "ducnmm", "unauthorized-demo");
+  const state = await readSuiRepoState(config, owner, "unauthorized-demo");
   expect(state?.refs).toEqual({});
   expect(state?.manifests).toEqual([]);
 });
 
-test("requires delegate headers for push and private fetch", async () => {
+test("opens pull requests from pushed branches", async () => {
+  const owner = delegate.address;
+  const remoteUrl = `${baseUrl}/${owner}/pr-demo.git`;
   await registerDelegate();
   const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
     method: "POST",
@@ -490,7 +545,173 @@ test("requires delegate headers for push and private fetch", async () => {
       ...delegateHeaders()
     },
     body: JSON.stringify({
-      owner: "ducnmm",
+      name: "pr-demo",
+      visibility: "public"
+    })
+  });
+  expect(createResponse.status).toBe(201);
+
+  const sourceRepo = join(workspace, "pr-source");
+  await git(["init", sourceRepo]);
+  await git(["config", "user.email", "test@octopus.local"], sourceRepo);
+  await git(["config", "user.name", "Octopus Test"], sourceRepo);
+  await writeFile(join(sourceRepo, "README.md"), "hello octopus\n");
+  await git(["add", "README.md"], sourceRepo);
+  await git(["commit", "-m", "initial commit"], sourceRepo);
+  await git(["branch", "-M", "main"], sourceRepo);
+  await git(["remote", "add", "origin", remoteUrl], sourceRepo);
+  await git([
+    "config",
+    "--local",
+    "--add",
+    `http.${remoteUrl}.extraHeader`,
+    `${delegateAuthHeaders.token}: ${gitAuthHeaders[delegateAuthHeaders.token]}`
+  ], sourceRepo);
+  await git(["push", "origin", "main"], sourceRepo);
+
+  await git(["checkout", "-b", "feature/readme"], sourceRepo);
+  await writeFile(join(sourceRepo, "README.md"), "hello octopus\nfrom a pull request\n");
+  await git(["add", "README.md"], sourceRepo);
+  await git(["commit", "-m", "update readme"], sourceRepo);
+  await git(["push", "origin", "feature/readme"], sourceRepo);
+  const featureCommit = await git(["rev-parse", "HEAD"], sourceRepo);
+
+  const pullResponse = await fetch(new URL(`/v1/repos/${owner}/pr-demo/pulls`, baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...delegateHeaders()
+    },
+    body: JSON.stringify({
+      title: "Update README",
+      body: "Adds a second line.",
+      baseRef: "main",
+      headRef: "feature/readme"
+    })
+  });
+  expect(pullResponse.status).toBe(201);
+  const pullBody = (await pullResponse.json()) as {
+    pullRequest: {
+      number: number;
+      title: string;
+      status: "open";
+      baseRef: string;
+      headRef: string;
+      headCommit: string;
+    };
+  };
+  expect(pullBody.pullRequest).toMatchObject({
+    number: 1,
+    title: "Update README",
+    status: "open",
+    baseRef: "refs/heads/main",
+    headRef: "refs/heads/feature/readme",
+    headCommit: featureCommit
+  });
+
+  const pullListResponse = await fetch(new URL(`/v1/repos/${owner}/pr-demo/pulls`, baseUrl));
+  expect(pullListResponse.status).toBe(200);
+  const pullListBody = (await pullListResponse.json()) as {
+    pullRequests: Array<{ number: number; title: string }>;
+  };
+  expect(pullListBody.pullRequests).toEqual([
+    expect.objectContaining({
+      number: 1,
+      title: "Update README"
+    })
+  ]);
+
+  const pullDetailResponse = await fetch(new URL(`/v1/repos/${owner}/pr-demo/pulls/1`, baseUrl));
+  expect(pullDetailResponse.status).toBe(200);
+  const pullDetailBody = (await pullDetailResponse.json()) as {
+    comparison: {
+      commitCount: number;
+      fileCount: number;
+      additions: number;
+      deletions: number;
+      commits: Array<{ oid: string; subject: string }>;
+      files: Array<{ path: string; additions: number }>;
+      patch: string;
+    };
+  };
+  expect(pullDetailBody.comparison).toMatchObject({
+    commitCount: 1,
+    fileCount: 1
+  });
+  expect(pullDetailBody.comparison.commits[0]).toMatchObject({
+    oid: featureCommit,
+    subject: "update readme"
+  });
+  expect(pullDetailBody.comparison.files[0]).toMatchObject({
+    path: "README.md",
+    additions: 1
+  });
+  expect(pullDetailBody.comparison.patch).toContain("from a pull request");
+
+  const pullListPageResponse = await fetch(new URL(`/${owner}/pr-demo/pulls`, baseUrl));
+  expect(pullListPageResponse.status).toBe(200);
+  const pullListPage = await pullListPageResponse.text();
+  expect(pullListPage).toContain("Pull requests");
+  expect(pullListPage).toContain("Update README");
+  expect(pullListPage).not.toContain("Open pull request");
+
+  const webSessionCookie = await createWebSessionCookie(`/${owner}/pr-demo/pulls`);
+  const signedPullListPageResponse = await fetch(new URL(`/${owner}/pr-demo/pulls`, baseUrl), {
+    headers: { cookie: webSessionCookie }
+  });
+  expect(signedPullListPageResponse.status).toBe(200);
+  const signedPullListPage = await signedPullListPageResponse.text();
+  expect(signedPullListPage).toContain("New pull request");
+  expect(signedPullListPage).toContain(`href="/${owner}/pr-demo/pulls/new"`);
+  expect(signedPullListPage).not.toContain("Open pull request");
+
+  const pullCreatePageResponse = await fetch(new URL(`/${owner}/pr-demo/pulls/new`, baseUrl), {
+    headers: { cookie: webSessionCookie }
+  });
+  expect(pullCreatePageResponse.status).toBe(200);
+  const pullCreatePage = await pullCreatePageResponse.text();
+  expect(pullCreatePage).toContain("Open pull request");
+  expect(pullCreatePage).toContain("feature/readme");
+  expect(pullCreatePage).toContain(`action="/${owner}/pr-demo/pulls"`);
+
+  const pullDetailPageResponse = await fetch(new URL(`/${owner}/pr-demo/pulls/1`, baseUrl));
+  expect(pullDetailPageResponse.status).toBe(200);
+  const pullDetailPage = await pullDetailPageResponse.text();
+  const shortOwner = `${owner.slice(0, 6)}...${owner.slice(-4)}`;
+  expect(pullDetailPage).toContain("Adds a second line.");
+  expect(pullDetailPage).toContain("feature/readme");
+  expect(pullDetailPage).toContain("README.md");
+  expect(pullDetailPage).toContain(shortOwner);
+  expect(pullDetailPage).not.toContain(">Octopus Test</td>");
+  expect(pullDetailPage).not.toContain("diff --git");
+
+  const duplicateResponse = await fetch(new URL(`/v1/repos/${owner}/pr-demo/pulls`, baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...delegateHeaders()
+    },
+    body: JSON.stringify({
+      title: "Duplicate",
+      baseRef: "main",
+      headRef: "feature/readme"
+    })
+  });
+  expect(duplicateResponse.status).toBe(409);
+});
+
+test("requires delegate headers for push and private fetch", async () => {
+  const owner = delegate.address;
+  const repoId = `${owner}/private-demo`;
+  const remotePath = `/${owner}/private-demo.git`;
+  await registerDelegate();
+  const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...delegateHeaders()
+    },
+    body: JSON.stringify({
       name: "private-demo",
       visibility: "private"
     })
@@ -501,6 +722,137 @@ test("requires delegate headers for push and private fetch", async () => {
   expect(anonymousRepoList.status).toBe(200);
   await expect(anonymousRepoList.json()).resolves.toEqual({ repos: [] });
 
+  const anonymousPrivatePage = await fetch(new URL(`/${owner}/private-demo`, baseUrl));
+  expect(anonymousPrivatePage.status).toBe(401);
+  await expect(anonymousPrivatePage.text()).resolves.toContain("Sign in with your Sui wallet");
+
+  const anonymousPrivatePulls = await fetch(new URL(`/v1/repos/${owner}/private-demo/pulls`, baseUrl));
+  expect(anonymousPrivatePulls.status).toBe(401);
+
+  const challengeResponse = await fetch(new URL("/v1/auth/web-session/challenge?returnTo=/", baseUrl));
+  expect(challengeResponse.status).toBe(200);
+  const challenge = (await challengeResponse.json()) as { nonce: string; message: string };
+  const { signature } = await delegateKeypair.signPersonalMessage(Buffer.from(challenge.message, "utf8"));
+  const webSessionResponse = await fetch(new URL("/v1/auth/web-session", baseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      nonce: challenge.nonce,
+      walletAddress: delegate.address,
+      accountId: delegate.accountId,
+      signature
+    })
+  });
+  expect(webSessionResponse.status).toBe(200);
+  let webSessionCookie = webSessionResponse.headers.get("set-cookie")?.split(";")[0];
+  expect(webSessionCookie).toBeTruthy();
+
+  const webSessionRepoList = await fetch(new URL("/v1/repos", baseUrl), {
+    headers: { cookie: webSessionCookie ?? "" }
+  });
+  expect(webSessionRepoList.status).toBe(200);
+  const webSessionRepoListBody = (await webSessionRepoList.json()) as {
+    repos: Array<{ repoId: string; visibility: "public" | "private" }>;
+  };
+  expect(webSessionRepoListBody.repos).toHaveLength(1);
+  expect(webSessionRepoListBody.repos[0]).toMatchObject({
+    repoId,
+    visibility: "private"
+  });
+
+  const lockedIndexResponse = await fetch(new URL(`/v1/repos/${owner}/private-demo/index`, baseUrl), {
+    headers: { cookie: webSessionCookie ?? "" }
+  });
+  expect(lockedIndexResponse.status).toBe(423);
+
+  const lockedPullsResponse = await fetch(new URL(`/v1/repos/${owner}/private-demo/pulls`, baseUrl), {
+    headers: { cookie: webSessionCookie ?? "" }
+  });
+  expect(lockedPullsResponse.status).toBe(423);
+
+  const lockedPrivatePage = await fetch(new URL(`/${owner}/private-demo`, baseUrl), {
+    headers: { cookie: webSessionCookie ?? "" }
+  });
+  expect(lockedPrivatePage.status).toBe(423);
+  await expect(lockedPrivatePage.text()).resolves.toContain("Unlock repository");
+
+  const unlockChallengeResponse = await fetch(
+    new URL(`/v1/repos/${owner}/private-demo/unlock/challenge?returnTo=/${owner}/private-demo`, baseUrl),
+    { headers: { cookie: webSessionCookie ?? "" } }
+  );
+  expect(unlockChallengeResponse.status).toBe(200);
+  const unlockChallenge = (await unlockChallengeResponse.json()) as { nonce: string; message: string };
+  const unlockSignature = await delegateKeypair.signPersonalMessage(Buffer.from(unlockChallenge.message, "utf8"));
+  const unlockResponse = await fetch(new URL(`/v1/repos/${owner}/private-demo/unlock`, baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      cookie: webSessionCookie ?? ""
+    },
+    body: JSON.stringify({
+      nonce: unlockChallenge.nonce,
+      signature: unlockSignature.signature
+    })
+  });
+  expect(unlockResponse.status).toBe(200);
+  webSessionCookie = unlockResponse.headers.get("set-cookie")?.split(";")[0] ?? webSessionCookie;
+
+  const unlockedIndexResponse = await fetch(new URL(`/v1/repos/${owner}/private-demo/index`, baseUrl), {
+    headers: { cookie: webSessionCookie ?? "" }
+  });
+  expect(unlockedIndexResponse.status).toBe(200);
+
+  const unlockedPullsResponse = await fetch(new URL(`/v1/repos/${owner}/private-demo/pulls`, baseUrl), {
+    headers: { cookie: webSessionCookie ?? "" }
+  });
+  expect(unlockedPullsResponse.status).toBe(200);
+  await expect(unlockedPullsResponse.json()).resolves.toEqual({ pullRequests: [] });
+
+  const contributorWallet = Ed25519Keypair.generate().getPublicKey().toSuiAddress();
+  const accessPageResponse = await fetch(new URL(`/${owner}/private-demo/settings/access`, baseUrl), {
+    headers: { cookie: webSessionCookie ?? "" }
+  });
+  expect(accessPageResponse.status).toBe(200);
+  const accessPage = await accessPageResponse.text();
+  expect(accessPage).toContain("Contributors");
+  expect(accessPage).toContain("0x wallet address");
+  expect(accessPage).toContain(`action="/${owner}/private-demo/contributors"`);
+
+  const addContributorResponse = await fetch(new URL(`/${owner}/private-demo/contributors`, baseUrl), {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      ...delegateHeaders()
+    },
+    body: new URLSearchParams({
+      action: "add",
+      role: "writer",
+      walletAddress: contributorWallet,
+      returnTo: `/${owner}/private-demo/settings/access`
+    }).toString()
+  });
+  expect(addContributorResponse.status).toBe(303);
+  expect(addContributorResponse.headers.get("location")).toBe(`/${owner}/private-demo/settings/access`);
+  const contributorState = await readSuiRepoState(config, owner, "private-demo");
+  expect(contributorState?.writers).toContain(contributorWallet.toLowerCase());
+
+  const contributorPageResponse = await fetch(new URL(`/${owner}/private-demo`, baseUrl), {
+    headers: { cookie: webSessionCookie ?? "" }
+  });
+  expect(contributorPageResponse.status).toBe(200);
+  const contributorPage = await contributorPageResponse.text();
+  expect(contributorPage).toContain("Settings");
+  expect(contributorPage).toContain(`href="/${owner}/private-demo/settings/access"`);
+  expect(contributorPage).not.toContain("0x wallet address");
+
+  const updatedAccessPageResponse = await fetch(new URL(`/${owner}/private-demo/settings/access`, baseUrl), {
+    headers: { cookie: webSessionCookie ?? "" }
+  });
+  expect(updatedAccessPageResponse.status).toBe(200);
+  const updatedAccessPage = await updatedAccessPageResponse.text();
+  expect(updatedAccessPage).toContain(contributorWallet.slice(0, 6));
+
   const authorizedRepoList = await fetch(new URL("/v1/repos", baseUrl), {
     headers: delegateHeaders()
   });
@@ -510,28 +862,119 @@ test("requires delegate headers for push and private fetch", async () => {
   };
   expect(authorizedRepoListBody.repos).toHaveLength(1);
   expect(authorizedRepoListBody.repos[0]).toMatchObject({
-    repoId: "ducnmm/private-demo",
+    repoId,
     visibility: "private"
   });
 
   const pushAdvertisement = await fetch(
-    new URL("/ducnmm/private-demo.git/info/refs?service=git-receive-pack", baseUrl)
+    new URL(`${remotePath}/info/refs?service=git-receive-pack`, baseUrl)
   );
   expect(pushAdvertisement.status).toBe(401);
   expect(pushAdvertisement.headers.get("www-authenticate")).toBe('Basic realm="Octopus"');
 
   const privateFetchAdvertisement = await fetch(
-    new URL("/ducnmm/private-demo.git/info/refs?service=git-upload-pack", baseUrl)
+    new URL(`${remotePath}/info/refs?service=git-upload-pack`, baseUrl)
   );
   expect(privateFetchAdvertisement.status).toBe(401);
   expect(privateFetchAdvertisement.headers.get("www-authenticate")).toBe('Basic realm="Octopus"');
 
   const basicAuthToken = Buffer.from(`octopus:${gitAuthHeaders[delegateAuthHeaders.token]}`, "utf8").toString("base64");
   const authorizedFetchAdvertisement = await fetch(
-    new URL("/ducnmm/private-demo.git/info/refs?service=git-upload-pack", baseUrl),
+    new URL(`${remotePath}/info/refs?service=git-upload-pack`, baseUrl),
     { headers: { authorization: `Basic ${basicAuthToken}` } }
   );
   expect(authorizedFetchAdvertisement.status).toBe(200);
+});
+
+test("rejects repo owners that do not belong to the authenticated wallet", async () => {
+  await registerDelegate();
+  const otherWallet = Ed25519Keypair.generate().getPublicKey().toSuiAddress();
+
+  const wrongAddressResponse = await fetch(new URL("/v1/repos", baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...delegateHeaders()
+    },
+    body: JSON.stringify({
+      owner: otherWallet,
+      name: "demo",
+      visibility: "public"
+    })
+  });
+  expect(wrongAddressResponse.status).toBe(403);
+
+  const arbitraryOwnerResponse = await fetch(new URL("/v1/repos", baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...delegateHeaders()
+    },
+    body: JSON.stringify({
+      owner: "ducnmm",
+      name: "demo",
+      visibility: "public"
+    })
+  });
+  expect(arbitraryOwnerResponse.status).toBe(400);
+});
+
+test("only allows configured browser origins to use credentialed CORS", async () => {
+  const allowedPreflight = await fetch(new URL("/v1/repos", baseUrl), {
+    method: "OPTIONS",
+    headers: {
+      origin: "http://127.0.0.1:45173",
+      "access-control-request-method": "POST"
+    }
+  });
+  expect(allowedPreflight.status).toBe(204);
+  expect(allowedPreflight.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:45173");
+  expect(allowedPreflight.headers.get("access-control-allow-credentials")).toBe("true");
+
+  const disallowedPreflight = await fetch(new URL("/v1/repos", baseUrl), {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://evil.example",
+      "access-control-request-method": "POST"
+    }
+  });
+  expect(disallowedPreflight.status).toBe(403);
+  expect(disallowedPreflight.headers.get("access-control-allow-origin")).toBeNull();
+});
+
+test("accepts browser form logout posts and clears the web session cookie", async () => {
+  const challengeResponse = await fetch(new URL("/v1/auth/web-session/challenge?returnTo=/", baseUrl));
+  expect(challengeResponse.status).toBe(200);
+  const challenge = (await challengeResponse.json()) as { nonce: string; message: string };
+  const { signature } = await delegateKeypair.signPersonalMessage(Buffer.from(challenge.message, "utf8"));
+  const webSessionResponse = await fetch(new URL("/v1/auth/web-session", baseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      nonce: challenge.nonce,
+      walletAddress: delegate.address,
+      accountId: delegate.accountId,
+      signature
+    })
+  });
+  expect(webSessionResponse.status).toBe(200);
+  const webSessionCookie = webSessionResponse.headers.get("set-cookie")?.split(";")[0];
+  expect(webSessionCookie).toBeTruthy();
+
+  const logoutResponse = await fetch(new URL("/logout", baseUrl), {
+    method: "POST",
+    redirect: "manual",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      cookie: webSessionCookie ?? "",
+      referer: `${baseUrl}/`
+    },
+    body: ""
+  });
+
+  expect(logoutResponse.status).toBe(303);
+  expect(logoutResponse.headers.get("location")).toBe("/");
+  expect(logoutResponse.headers.get("set-cookie")).toContain("Max-Age=0");
 });
 
 test("fails closed for Git when testnet authorization state is unavailable", async () => {
@@ -570,6 +1013,7 @@ test("fails closed for Git when testnet authorization state is unavailable", asy
 });
 
 test("encrypts private push artifacts and requires auth for restore", async () => {
+  const owner = delegate.address;
   await registerDelegate();
   const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
     method: "POST",
@@ -578,7 +1022,6 @@ test("encrypts private push artifacts and requires auth for restore", async () =
       ...delegateHeaders()
     },
     body: JSON.stringify({
-      owner: "ducnmm",
       name: "sealed-demo",
       visibility: "private"
     })
@@ -589,7 +1032,7 @@ test("encrypts private push artifacts and requires auth for restore", async () =
   const restoredCloneRepo = join(workspace, "private-restored-clone");
   const gitConfigGlobal = join(workspace, "private-clone-gitconfig");
   const gitCredentialStore = join(workspace, "private-clone-credentials");
-  const remoteUrl = `${baseUrl}/ducnmm/sealed-demo.git`;
+  const remoteUrl = `${baseUrl}/${owner}/sealed-demo.git`;
   await git(["init", sourceRepo]);
   await git(["config", "user.email", "test@octopus.local"], sourceRepo);
   await git(["config", "user.name", "Octopus Test"], sourceRepo);
@@ -607,7 +1050,7 @@ test("encrypts private push artifacts and requires auth for restore", async () =
   ], sourceRepo);
   await git(["push", "origin", "main"], sourceRepo);
 
-  const manifestResponse = await fetch(new URL("/v1/repos/ducnmm/sealed-demo/manifests", baseUrl), {
+  const manifestResponse = await fetch(new URL(`/v1/repos/${owner}/sealed-demo/manifests`, baseUrl), {
     headers: delegateHeaders()
   });
   expect(manifestResponse.status).toBe(200);
@@ -629,17 +1072,20 @@ test("encrypts private push artifacts and requires auth for restore", async () =
   const storedArtifact = await readFile(manifest.artifactPath);
   expect(createHash("sha256").update(storedArtifact).digest("hex")).toBe(manifest.storedArtifactDigest);
 
-  await rm(join(dataDir, "repos", "ducnmm", "sealed-demo.git"), { force: true, recursive: true });
-  const unauthorizedRestore = await fetch(new URL("/v1/repos/ducnmm/sealed-demo/restore", baseUrl), {
+  await rm(join(dataDir, "repos", owner, "sealed-demo.git"), { force: true, recursive: true });
+  const unauthorizedRestore = await fetch(new URL(`/v1/repos/${owner}/sealed-demo/restore`, baseUrl), {
     method: "POST"
   });
   expect(unauthorizedRestore.status).toBe(401);
 
-  const restoreResponse = await fetch(new URL("/v1/repos/ducnmm/sealed-demo/restore", baseUrl), {
+  const restoreResponse = await fetch(new URL(`/v1/repos/${owner}/sealed-demo/restore`, baseUrl), {
     method: "POST",
     headers: delegateHeaders()
   });
   expect(restoreResponse.status).toBe(200);
+  await expect(
+    git(["--git-dir", join(dataDir, "repos", owner, "sealed-demo.git"), "symbolic-ref", "HEAD"])
+  ).resolves.toBe("refs/heads/main");
 
   const remote = new URL(remoteUrl);
   await writeFile(gitConfigGlobal, `[credential]\n\thelper = store --file=${gitCredentialStore}\n`);

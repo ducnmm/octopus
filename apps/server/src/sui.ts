@@ -12,6 +12,7 @@ export type SuiRefState = {
   refName: string;
   commitDigest: string;
   manifestId: string;
+  actorWalletAddress?: string;
   seq: number;
   updatedAtMs: number;
 };
@@ -64,6 +65,9 @@ export type SuiRepoStateAuthorizationResult = {
   authoritative: boolean;
   error?: Error;
 };
+
+export type SuiRepoAccessRole = "reader" | "writer";
+export type SuiRepoAccessAction = "add" | "remove";
 
 const repoObjectId = (owner: string, repo: string): string => {
   const digest = createHash("sha256").update(`${owner}/${repo}`).digest("hex");
@@ -324,15 +328,27 @@ export const anchorPushManifests = async (
       await pushRefOnTestnet(config, state, manifest, auth);
     }
 
+    const actorWalletAddress = manifest.actorWalletAddress ?? auth?.walletAddress;
+    const anchoredManifest: PackManifest = actorWalletAddress
+      ? {
+          ...manifest,
+          actorWalletAddress,
+          walrusMetadata: {
+            ...manifest.walrusMetadata,
+            octopus_actor_wallet: actorWalletAddress
+          }
+        }
+      : manifest;
     const updatedAtMs = Date.now();
     state.refs[manifest.refName] = {
       refName: manifest.refName,
       commitDigest: manifest.newCommit,
       manifestId: manifest.manifestId,
+      actorWalletAddress,
       seq: manifest.seq,
       updatedAtMs
     };
-    state.manifests = [...state.manifests, manifest].sort(
+    state.manifests = [...state.manifests, anchoredManifest].sort(
       (a, b) => a.seq - b.seq || a.manifestId.localeCompare(b.manifestId)
     );
     state.updatedAtMs = updatedAtMs;
@@ -423,6 +439,7 @@ const pushRefOnTestnet = async (
     storageMode: manifest.storageMode,
     walrusBlobOwnerAddress: manifest.walrusBlobOwnerAddress,
     walrusOwnershipTransferred: manifest.walrusOwnershipTransferred ?? false,
+    actorWalletAddress: manifest.actorWalletAddress ?? auth?.walletAddress,
     sealEnvelope: manifest.sealEnvelope ?? null
   });
   const tx = new Transaction();
@@ -483,6 +500,59 @@ export const canWriteRepo = (state: SuiRepoState, auth?: AuthContext | null): bo
     auth.walletAddress === state.owner ||
     (state.writers ?? []).includes(auth.walletAddress)
   );
+};
+
+export const canManageRepoAccess = (state: SuiRepoState, auth?: AuthContext | null): boolean => {
+  if (!auth) {
+    return false;
+  }
+
+  const walletAddress = auth.walletAddress.toLowerCase();
+  return walletAddress === state.ownerWallet.toLowerCase() || walletAddress === state.owner.toLowerCase();
+};
+
+const uniqueAddresses = (addresses: string[]): string[] => {
+  return [...new Set(addresses.map((address) => address.trim().toLowerCase()).filter(Boolean))].sort();
+};
+
+export const updateSuiRepoAccess = async (
+  config: ServerConfig,
+  state: SuiRepoState,
+  input: {
+    walletAddress: string;
+    role: SuiRepoAccessRole;
+    action: SuiRepoAccessAction;
+  }
+): Promise<SuiRepoState> => {
+  if (state.registryMode === "testnet" || config.suiMode === "testnet") {
+    throw new Error("Contributor management from the web UI is currently supported for local registry mode only");
+  }
+
+  const walletAddress = input.walletAddress.trim().toLowerCase();
+  const readers = new Set(uniqueAddresses(state.readers ?? []));
+  const writers = new Set(uniqueAddresses(state.writers ?? []));
+
+  if (input.action === "add") {
+    if (input.role === "writer") {
+      writers.add(walletAddress);
+      readers.delete(walletAddress);
+    } else if (!writers.has(walletAddress)) {
+      readers.add(walletAddress);
+    }
+  } else if (input.role === "writer") {
+    writers.delete(walletAddress);
+  } else {
+    readers.delete(walletAddress);
+  }
+
+  const updated: SuiRepoState = {
+    ...state,
+    readers: [...readers].sort(),
+    writers: [...writers].sort(),
+    updatedAtMs: Date.now()
+  };
+  await writeRepoStateFile(config, updated);
+  return updated;
 };
 
 const testnetClient = (config: ServerConfig): SuiJsonRpcClient => {
@@ -643,6 +713,10 @@ const readTestnetRepoManifests = async (
     const newCommit = asString(value.new_commit);
     const manifest: PackManifest = {
       manifestId: asString(value.manifest_id),
+      actorWalletAddress: asString(metadata.actorWalletAddress) ||
+        asString(metadata.octopus_actor_wallet) ||
+        asString(metadata.actorWallet) ||
+        undefined,
       repoId: input.repoId,
       owner: input.owner,
       repo: input.repo,
@@ -670,6 +744,9 @@ const readTestnetRepoManifests = async (
         octopus_owner: input.owner,
         octopus_ref: refName,
         octopus_manifest_id: asString(metadata.localManifestId) || asString(value.manifest_id),
+        ...(asString(metadata.actorWalletAddress) || asString(metadata.octopus_actor_wallet)
+          ? { octopus_actor_wallet: asString(metadata.actorWalletAddress) || asString(metadata.octopus_actor_wallet) }
+          : {}),
         octopus_seq: String(seq),
         octopus_artifact_digest: artifactDigest,
         octopus_visibility: input.visibility,
@@ -686,6 +763,7 @@ const readTestnetRepoManifests = async (
     const mergedStoredArtifactDigest = manifest.storedArtifactDigest || local?.storedArtifactDigest;
     manifests.push({
       ...manifest,
+      actorWalletAddress: manifest.actorWalletAddress || local?.actorWalletAddress,
       storedArtifactDigest: mergedStoredArtifactDigest,
       sealEnvelope: manifest.sealEnvelope?.mode ? manifest.sealEnvelope : local?.sealEnvelope,
       encrypted: manifest.encrypted || local?.encrypted === true,

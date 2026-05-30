@@ -52,8 +52,8 @@ Then authenticate the CLI and connect a Git remote:
 
 ```bash
 pnpm ocp auth login --server http://127.0.0.1:48787 --web-url http://127.0.0.1:45173
-pnpm ocp repo create demo --owner ducnmm --public
-pnpm ocp repo connect ducnmm/demo --remote origin --server http://127.0.0.1:48787
+pnpm ocp repo create demo --public
+pnpm ocp repo connect <owner-from-create>/demo --remote origin --server http://127.0.0.1:48787
 git push origin main
 ```
 
@@ -61,6 +61,11 @@ git push origin main
 credential for the server. Git commands use the credential helper by default.
 `ocp repo sync-auth` remains available for older repo-local `http.extraHeader`
 setups.
+
+Repo owner namespaces default to the authenticated wallet's primary SuiNS name
+when available, and fall back to the full wallet address. Passing `--owner`
+requires either a SuiNS name ending in `.sui` that resolves to the authenticated
+wallet or the authenticated wallet address itself.
 
 In testnet mode the server exposes the deployed package and registry IDs from
 `/v1/auth/config`, so login opens the on-chain wallet approval flow and registers
@@ -105,6 +110,14 @@ SEAL_KEY_SERVERS=0x...
 `SEAL_SERVER_CONFIGS` can be used instead of `SEAL_KEY_SERVERS` for weighted or
 aggregator-backed key server configs.
 
+Private pushes to durable Walrus storage (`OCTOPUS_WALRUS_MODE=cli` or `relay`)
+require `OCTOPUS_SEAL_MODE=seal`; the local deterministic seal is only accepted
+for local development storage.
+
+Web wallet sessions are stored in signed HTTP-only cookies. For deployed
+servers, set `OCTOPUS_WEB_SESSION_SECRET` to the same high-entropy value on every
+replica so sessions survive restarts and load balancing.
+
 During local development the Sui registry path is mirrored under
 `data/sui/repos`. This gives push/restore tests the same ref-manifest shape as
 the Move package before a package is published and wired to live Sui
@@ -113,13 +126,13 @@ transactions.
 Create a local bare repo through the CLI:
 
 ```bash
-pnpm ocp repo create demo --owner ducnmm --public
+pnpm ocp repo create demo --public
 ```
 
 After a successful push, list generated artifact manifests:
 
 ```bash
-pnpm ocp repo manifests ducnmm/demo
+pnpm ocp repo manifests <owner-from-create>/demo
 ```
 
 Run checks:
@@ -136,13 +149,13 @@ cd contracts/sui && sui move test
 ```bash
 ocp auth login
 ocp repo create demo
-git remote add origin http://127.0.0.1:48787/ducnmm/demo.git
+git remote add origin http://127.0.0.1:48787/<owner-from-create>/demo.git
 git push origin main
 
-rm -rf ./data/repos/ducnmm/demo.git
+rm -rf ./data/repos/<owner-from-create>/demo.git
 
-ocp repo restore ducnmm/demo
-git clone http://127.0.0.1:48787/ducnmm/demo.git restored-demo
+ocp repo restore <owner-from-create>/demo
+git clone http://127.0.0.1:48787/<owner-from-create>/demo.git restored-demo
 ```
 
 Expected result: the restored clone has the same Git commit hash as the original repository.
@@ -153,6 +166,6 @@ delete-ref transaction.
 
 ## Current Status
 
-- Implemented: local Git HTTP push/clone, delegate-key CLI auth, Git credential-helper auth, repo-local Git `http.extraHeader` compatibility, authenticated push authorization, bare repo cache, snapshot bundle artifacts, SHA-256 manifests, local Sui registry mirror, restore from Sui-shaped manifests, Walrus CLI upload mode, Walrus upload relay mode with blob attributes and owner transfer, Walrus Aggregator download mode, local private artifact encryption, feature-flagged SEAL private artifact encryption, local file/commit indexing, repository file browser, file viewer, commit list, JSON index surfaces, and a Vite wallet login page.
-- Scaffolded: Sui testnet adapter for delegate verification, `create_repo`, `push_ref`, and `seal_approve`; Postgres schema migration for accounts/repos/manifests/artifacts/push attempts; Sui Move package with account, delegate, private read allow list, and delegate-authorized `push_ref`.
-- Not yet implemented: hosted production indexer worker, code search, pull request review surfaces, issue tracker, CI, and organization/team permission model.
+- Implemented: local Git HTTP push/clone, delegate-key CLI auth, Git credential-helper auth, repo-local Git `http.extraHeader` compatibility, authenticated push authorization, bare repo cache, snapshot bundle artifacts, SHA-256 manifests, local Sui registry mirror, restore from Sui-shaped manifests, Walrus CLI upload mode, Walrus upload relay mode with blob attributes and owner transfer, Walrus Aggregator download mode, local private artifact encryption, feature-flagged SEAL private artifact encryption, local file/commit indexing, repository file browser, file viewer, commit list, contribution activity, JSON index surfaces, Vite wallet login/unlock flows, signed web session cookies, and GitHub Actions CI.
+- Scaffolded: Sui testnet adapter for delegate verification, `create_repo`, `push_ref`, and `seal_approve`; Postgres schema migration for accounts/repos/manifests/artifacts/push attempts; Sui Move package with account, delegate, private read allow list, delegate-authorized `push_ref`, and Move unit tests.
+- Not yet implemented: hosted production indexer worker, code search, pull request review surfaces, issue tracker, and organization/team permission model.

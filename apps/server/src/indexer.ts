@@ -17,6 +17,9 @@ export type IndexedCommit = {
   authorName: string;
   authorEmail: string;
   authoredAt: string;
+  committerName?: string;
+  committerEmail?: string;
+  committedAt?: string;
   subject: string;
   refs: string[];
 };
@@ -85,6 +88,45 @@ const runGit = async (args: string[], input?: Buffer): Promise<GitResult> => {
     });
 
     child.stdin.end(input);
+  });
+};
+
+const runGitStdoutPrefix = async (args: string[], maxBytes: number): Promise<Buffer> => {
+  if (maxBytes <= 0) {
+    return Buffer.alloc(0);
+  }
+
+  return await new Promise((resolvePromise, reject) => {
+    const child = spawn("git", args, {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let stoppedAfterLimit = false;
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (bytes < maxBytes) {
+        const remaining = maxBytes - bytes;
+        stdout.push(chunk.length > remaining ? chunk.subarray(0, remaining) : chunk);
+      }
+      bytes += chunk.length;
+      if (bytes >= maxBytes && !stoppedAfterLimit) {
+        stoppedAfterLimit = true;
+        child.kill("SIGTERM");
+      }
+    });
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", reject);
+    child.on("close", (code, signal) => {
+      if (code === 0 || stoppedAfterLimit || signal === "SIGTERM") {
+        resolvePromise(Buffer.concat(stdout));
+        return;
+      }
+
+      reject(new Error(`git ${args.join(" ")} failed: ${Buffer.concat(stderr).toString()}`));
+    });
   });
 };
 
@@ -166,7 +208,18 @@ const parseCommits = (raw: string): IndexedCommit[] => {
     .map((record) => record.trim())
     .filter(Boolean)
     .map((record) => {
-      const [oid = "", parents = "", authorName = "", authorEmail = "", authoredAt = "", subject = "", refs = ""] =
+      const [
+        oid = "",
+        parents = "",
+        authorName = "",
+        authorEmail = "",
+        authoredAt = "",
+        committerName = "",
+        committerEmail = "",
+        committedAt = "",
+        subject = "",
+        refs = ""
+      ] =
         record.split("\x1f");
       return {
         oid,
@@ -174,6 +227,9 @@ const parseCommits = (raw: string): IndexedCommit[] => {
         authorName,
         authorEmail,
         authoredAt,
+        committerName,
+        committerEmail,
+        committedAt,
         subject,
         refs: refs
           .split(",")
@@ -199,7 +255,7 @@ export const readCommits = async (
     "log",
     `--max-count=${Math.max(1, Math.min(limit, 500))}`,
     "--date=iso-strict",
-    "--pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%D%x1e",
+    "--pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%s%x1f%D%x1e",
     commit
   ]);
   return parseCommits(result.stdout.toString("utf8"));
@@ -304,9 +360,10 @@ export const readBlob = async (
     (await runGit(["--git-dir", repoPath, "cat-file", "-s", objectSpec])).stdout.toString("utf8").trim(),
     10
   );
-  const content = (await runGit(["--git-dir", repoPath, "cat-file", "-p", objectSpec])).stdout;
-  const truncated = content.length > BLOB_VIEW_LIMIT_BYTES;
-  const viewContent = truncated ? content.subarray(0, BLOB_VIEW_LIMIT_BYTES) : content;
+  const truncated = size > BLOB_VIEW_LIMIT_BYTES;
+  const viewContent = truncated
+    ? await runGitStdoutPrefix(["--git-dir", repoPath, "cat-file", "blob", objectSpec], BLOB_VIEW_LIMIT_BYTES)
+    : (await runGit(["--git-dir", repoPath, "cat-file", "blob", objectSpec])).stdout;
   const encoding = isUtf8(viewContent) ? "utf8" : "base64";
 
   return {

@@ -1,25 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DAppKitProvider, useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { ConnectButton } from "@mysten/dapp-kit-react/ui";
 import { Transaction } from "@mysten/sui/transactions";
 import { dAppKit } from "./dapp-kit.js";
 import { runtimeConfig, suiClient } from "./config.js";
+import {
+  authPanelMode,
+  browserFlowTarget,
+  loginParamsFromSearch,
+  type LoginParams
+} from "./login-params.js";
 import "./styles.css";
 
 type LoginState = "idle" | "working" | "success" | "error";
-
-type LoginParams = {
-  callback: string;
-  server: string;
-  delegatePublicKey: string;
-  delegateAddress: string;
-  state: string;
-  packageId: string;
-  accountRegistryId: string;
-  repoRegistryId: string;
-  serverDelegatePublicKey: string;
-  serverDelegateAddress: string;
-};
 
 type DelegateInput = {
   publicKey: string;
@@ -28,19 +21,7 @@ type DelegateInput = {
 };
 
 const queryParams = (): LoginParams => {
-  const params = new URLSearchParams(window.location.search);
-  return {
-    callback: params.get("callback") ?? "",
-    server: params.get("server") ?? "",
-    delegatePublicKey: params.get("delegatePublicKey") ?? "",
-    delegateAddress: params.get("delegateAddress") ?? "",
-    state: params.get("state") ?? "",
-    packageId: params.get("packageId") ?? runtimeConfig.packageId,
-    accountRegistryId: params.get("accountRegistryId") ?? runtimeConfig.accountRegistryId,
-    repoRegistryId: params.get("repoRegistryId") ?? runtimeConfig.repoRegistryId,
-    serverDelegatePublicKey: params.get("serverDelegatePublicKey") ?? "",
-    serverDelegateAddress: params.get("serverDelegateAddress") ?? ""
-  };
+  return loginParamsFromSearch(window.location.search, runtimeConfig);
 };
 
 const hexToBytes = (hex: string): number[] => {
@@ -98,20 +79,54 @@ const desiredDelegates = (params: LoginParams): DelegateInput[] => {
   return delegates;
 };
 
-const resolveRegisteredDelegates = async (accountId: string): Promise<Set<string>> => {
+const fieldsAsRecord = (value: unknown): Record<string, unknown> => {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+};
+
+const normalizeMoveBytes = (value: unknown): string => {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+
+  return value.map((byte) => Number(byte).toString(16).padStart(2, "0")).join("");
+};
+
+const isDelegateKeyRegistered = async (
+  accountId: string,
+  publicKey: string,
+  delegateAddress: string
+): Promise<boolean> => {
   const accountObject = await suiClient.getObject({
     id: accountId,
     options: { showContent: true }
   });
-  const fields = (accountObject.data?.content as {
-    fields?: { delegate_keys?: Array<{ fields?: { sui_address?: string } }> };
-  } | undefined)?.fields;
+  const content = fieldsAsRecord(accountObject.data?.content);
+  const fields = fieldsAsRecord(content.fields);
+  const delegateKeys = Array.isArray(fields.delegate_keys) ? fields.delegate_keys : [];
+  const normalizedPublicKey = publicKey.replace(/^0x/, "").toLowerCase();
+  const normalizedDelegateAddress = delegateAddress.toLowerCase();
 
-  return new Set(
-    (fields?.delegate_keys ?? [])
-      .map((delegate) => delegate.fields?.sui_address)
-      .filter((address): address is string => Boolean(address))
-  );
+  return delegateKeys.some((raw) => {
+    const keyFields = fieldsAsRecord(fieldsAsRecord(raw).fields);
+    return (
+      String(keyFields.sui_address ?? "").toLowerCase() === normalizedDelegateAddress ||
+      normalizeMoveBytes(keyFields.public_key).toLowerCase() === normalizedPublicKey
+    );
+  });
+};
+
+const resolvePendingDelegates = async (
+  accountId: string,
+  delegates: DelegateInput[]
+): Promise<DelegateInput[]> => {
+  const pending: DelegateInput[] = [];
+  for (const delegate of delegates) {
+    if (!await isDelegateKeyRegistered(accountId, delegate.publicKey, delegate.delegateAddress)) {
+      pending.push(delegate);
+    }
+  }
+
+  return pending;
 };
 
 const callbackCli = async (params: LoginParams, body: {
@@ -137,6 +152,94 @@ const callbackCli = async (params: LoginParams, body: {
     throw new Error(`CLI callback failed: HTTP ${response.status}`);
   }
 };
+
+type WebSessionChallenge = {
+  nonce: string;
+  message: string;
+  expiresAtMs: number;
+};
+
+type WebSessionResponse = {
+  ok?: boolean;
+  error?: string;
+  returnTo?: string;
+  accountId?: string;
+  walletAddress?: string;
+};
+
+const serverUrl = (params: LoginParams, path: string): string => {
+  return new URL(path, params.server || window.location.origin).toString();
+};
+
+const notifyBrowserHost = (params: LoginParams, type: string, data: Record<string, unknown> = {}): void => {
+  const targetOrigin = new URL(params.server || window.location.origin).origin;
+  const message = { type, ...data };
+
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage(message, targetOrigin);
+  }
+  if (window.opener && !window.opener.closed) {
+    window.opener.postMessage(message, targetOrigin);
+  }
+};
+
+const finishBrowserFlow = (params: LoginParams, returnTo: string): void => {
+  const target = browserFlowTarget(params, returnTo, window.location.origin);
+
+  if (params.embedded && window.parent && window.parent !== window) {
+    notifyBrowserHost(params, "octopus-auth-complete");
+    return;
+  }
+
+  if (window.opener && !window.opener.closed) {
+    notifyBrowserHost(params, "octopus-auth-complete");
+    window.setTimeout(() => window.close(), 50);
+    window.setTimeout(() => window.location.assign(target), 500);
+    return;
+  }
+
+  window.location.assign(target);
+};
+
+const shortMetricValue = (value: string, fallback: string): string => {
+  const text = value.trim();
+  if (!text) {
+    return fallback;
+  }
+
+  if (/^0x[0-9a-fA-F]+$/.test(text) && text.length > 14) {
+    return `${text.slice(0, 6)}...${text.slice(-4)}`;
+  }
+
+  return text;
+};
+
+const waitForDigest = async (digest: unknown): Promise<void> => {
+  if (typeof digest !== "string" || !digest) {
+    return;
+  }
+
+  await suiClient.waitForTransaction({ digest });
+};
+
+function MetricValue({ fallback, value }: { fallback: string; value?: string | null }) {
+  const fullValue = value?.trim() ?? "";
+
+  return (
+    <strong title={fullValue || undefined}>
+      {shortMetricValue(fullValue, fallback)}
+    </strong>
+  );
+}
+
+function DetailRow({ label, value, fallback }: { label: string; value?: string | null; fallback: string }) {
+  return (
+    <div className="detail-row">
+      <span>{label}</span>
+      <MetricValue fallback={fallback} value={value} />
+    </div>
+  );
+}
 
 function LoginPanel() {
   const account = useCurrentAccount();
@@ -203,11 +306,9 @@ function LoginPanel() {
 
       setIsResolvingAccount(true);
       try {
-        const registeredDelegates = await resolveRegisteredDelegates(accountId);
+        const nextPendingDelegates = await resolvePendingDelegates(accountId, desiredDelegates(params));
         if (!cancelled) {
-          setPendingDelegates(
-            desiredDelegates(params).filter((delegate) => !registeredDelegates.has(delegate.delegateAddress))
-          );
+          setPendingDelegates(nextPendingDelegates);
         }
       } finally {
         if (!cancelled) {
@@ -324,33 +425,18 @@ function LoginPanel() {
   }, [account, accountId, addDelegateKeys, createAccount, params, pendingDelegates]);
 
   return (
-    <main className="shell">
-      <section className="panel">
-        <div>
-          <p className="eyebrow">Octopus Testnet Auth</p>
-          <h1>Authorize CLI Delegate</h1>
-        </div>
-        <div className="grid">
-          <div>
-            <span>Wallet</span>
-            <strong>{account?.address ?? "Not connected"}</strong>
-          </div>
-          <div>
-            <span>Delegate</span>
-            <strong>{params.delegateAddress || "Missing"}</strong>
-          </div>
-          <div>
-            <span>Relay</span>
-            <strong>{params.serverDelegateAddress || "Local"}</strong>
-          </div>
-          <div>
-            <span>Server</span>
-            <strong>{params.server || "Missing"}</strong>
-          </div>
+    <main className="auth-shell">
+      <section className="auth-card" aria-label="Octopus authorization">
+        <h1>Authorize CLI Delegate</h1>
+        <div className="detail-list">
+          <DetailRow label="Wallet" fallback="Not connected" value={account?.address} />
+          <DetailRow label="Delegate" fallback="Missing" value={params.delegateAddress} />
+          <DetailRow label="Server" fallback="Missing" value={params.server} />
+          <DetailRow label="Relay" fallback="Local" value={params.serverDelegateAddress} />
         </div>
         <div className="actions">
-          <ConnectButton />
-          <button disabled={!account?.address || isResolvingAccount || state === "working"} onClick={() => void approve()}>
+          <ConnectButton>Connect Wallet</ConnectButton>
+          <button className="authorize-button" disabled={!account?.address || isResolvingAccount || state === "working"} onClick={() => void approve()} type="button">
             {state === "working" ? "Authorizing" : "Authorize"}
           </button>
         </div>
@@ -360,10 +446,375 @@ function LoginPanel() {
   );
 }
 
+function WebLoginPanel() {
+  const account = useCurrentAccount();
+  const kit = useDAppKit();
+  const params = useMemo(queryParams, []);
+  const autoStarted = useRef(false);
+  const [state, setState] = useState<LoginState>("idle");
+  const [message, setMessage] = useState("");
+
+  const signIn = useCallback(async () => {
+    if (!account?.address) {
+      setMessage("Connect a Sui wallet first.");
+      return;
+    }
+
+    if (!params.server) {
+      setState("error");
+      setMessage("Missing Octopus server URL.");
+      return;
+    }
+
+    setState("working");
+    setMessage("Preparing wallet signature...");
+
+    try {
+      const challengeUrl = new URL(serverUrl(params, "/v1/auth/web-session/challenge"));
+      challengeUrl.searchParams.set("returnTo", params.returnTo || "/");
+      const challengeResponse = await fetch(challengeUrl, {
+        credentials: "include"
+      });
+      const challenge = await challengeResponse.json() as WebSessionChallenge & { error?: string };
+      if (!challengeResponse.ok || !challenge.nonce || !challenge.message) {
+        throw new Error(challenge.error ?? `Challenge failed: HTTP ${challengeResponse.status}`);
+      }
+
+      setMessage("Sign the Octopus login message in your wallet.");
+      const signed = await (kit as unknown as {
+        signPersonalMessage: (input: { message: Uint8Array }) => Promise<{ bytes: string; signature: string }>;
+      }).signPersonalMessage({
+        message: new TextEncoder().encode(challenge.message)
+      });
+
+      let accountId: string | null = null;
+      if (params.accountRegistryId) {
+        try {
+          accountId = await resolveAccountId(params.accountRegistryId, account.address);
+        } catch {
+          accountId = null;
+        }
+      }
+
+      setMessage("Starting web session...");
+      const sessionResponse = await fetch(serverUrl(params, "/v1/auth/web-session"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          nonce: challenge.nonce,
+          walletAddress: account.address,
+          accountId: accountId ?? undefined,
+          signature: signed.signature
+        })
+      });
+      const session = await sessionResponse.json() as WebSessionResponse;
+      if (!sessionResponse.ok || !session.ok) {
+        throw new Error(session.error ?? `Web session failed: HTTP ${sessionResponse.status}`);
+      }
+
+      setState("success");
+      setMessage("Login complete.");
+      finishBrowserFlow(params, session.returnTo ?? params.returnTo ?? "/");
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      setState("error");
+      setMessage(text);
+      if (params.embedded) {
+        notifyBrowserHost(params, "octopus-auth-error", { message: text });
+      }
+    }
+  }, [account, kit, params]);
+
+  useEffect(() => {
+    if (!params.autoStart || autoStarted.current || !account?.address || state !== "idle") {
+      return;
+    }
+    autoStarted.current = true;
+    void signIn();
+  }, [account?.address, params.autoStart, signIn, state]);
+
+  useEffect(() => {
+    if (!params.embedded || !params.autoStart || account?.address || state !== "idle" || autoStarted.current) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (!account?.address && !autoStarted.current) {
+        notifyBrowserHost(params, "octopus-auth-needs-wallet");
+      }
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [account?.address, params, state]);
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-card" aria-label="Octopus web sign in">
+        <h1>Sign in to Octopus</h1>
+        <div className="detail-list">
+          <DetailRow label="Wallet" fallback="Not connected" value={account?.address} />
+          <DetailRow label="Server" fallback="Missing" value={params.server} />
+          <DetailRow label="Return" fallback="/" value={params.returnTo} />
+        </div>
+        <div className="actions">
+          <ConnectButton>Connect Wallet</ConnectButton>
+          <button className="authorize-button" disabled={!account?.address || state === "working"} onClick={() => void signIn()} type="button">
+            {state === "working" ? "Signing in" : "Sign in"}
+          </button>
+        </div>
+        {message && <p className={`status ${state}`}>{message}</p>}
+      </section>
+    </main>
+  );
+}
+
+function UnlockRepoPanel() {
+  const account = useCurrentAccount();
+  const kit = useDAppKit();
+  const params = useMemo(queryParams, []);
+  const autoStarted = useRef(false);
+  const [state, setState] = useState<LoginState>("idle");
+  const [message, setMessage] = useState("");
+
+  const unlock = useCallback(async () => {
+    if (!account?.address) {
+      setMessage("Connect a Sui wallet first.");
+      return;
+    }
+
+    if (!params.server || !params.owner || !params.repo) {
+      setState("error");
+      setMessage("Missing repository unlock parameters.");
+      return;
+    }
+
+    setState("working");
+    setMessage("Preparing repository unlock...");
+
+    try {
+      const repoPath = `/v1/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}`;
+      const challengeUrl = new URL(serverUrl(params, `${repoPath}/unlock/challenge`));
+      challengeUrl.searchParams.set("returnTo", params.returnTo || `/${params.owner}/${params.repo}`);
+      const challengeResponse = await fetch(challengeUrl, {
+        credentials: "include"
+      });
+      const challenge = await challengeResponse.json() as WebSessionChallenge & {
+        error?: string;
+        unlocked?: boolean;
+        repoId?: string;
+      };
+      if (challenge.unlocked) {
+        finishBrowserFlow(params, params.returnTo || `/${params.owner}/${params.repo}`);
+        return;
+      }
+      if (!challengeResponse.ok || !challenge.nonce || !challenge.message) {
+        throw new Error(challenge.error ?? `Unlock challenge failed: HTTP ${challengeResponse.status}`);
+      }
+
+      setMessage("Sign the repository unlock message in your wallet.");
+      const signed = await (kit as unknown as {
+        signPersonalMessage: (input: { message: Uint8Array }) => Promise<{ bytes: string; signature: string }>;
+      }).signPersonalMessage({
+        message: new TextEncoder().encode(challenge.message)
+      });
+
+      setMessage("Unlocking repository...");
+      const unlockResponse = await fetch(serverUrl(params, `${repoPath}/unlock`), {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          nonce: challenge.nonce,
+          signature: signed.signature
+        })
+      });
+      const result = await unlockResponse.json() as WebSessionResponse & { repoId?: string };
+      if (!unlockResponse.ok || !result.ok) {
+        throw new Error(result.error ?? `Repository unlock failed: HTTP ${unlockResponse.status}`);
+      }
+
+      setState("success");
+      setMessage("Repository unlocked.");
+      finishBrowserFlow(params, result.returnTo ?? params.returnTo ?? `/${params.owner}/${params.repo}`);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      setState("error");
+      setMessage(text);
+      if (params.embedded) {
+        notifyBrowserHost(params, "octopus-auth-error", { message: text });
+      }
+    }
+  }, [account, kit, params]);
+
+  useEffect(() => {
+    if (!params.autoStart || autoStarted.current || !account?.address || state !== "idle") {
+      return;
+    }
+    autoStarted.current = true;
+    void unlock();
+  }, [account?.address, params.autoStart, state, unlock]);
+
+  useEffect(() => {
+    if (!params.embedded || !params.autoStart || account?.address || state !== "idle" || autoStarted.current) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (!account?.address && !autoStarted.current) {
+        notifyBrowserHost(params, "octopus-auth-needs-wallet");
+      }
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [account?.address, params, state]);
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-card" aria-label="Octopus repository unlock">
+        <h1>Unlock repository</h1>
+        <div className="detail-list">
+          <DetailRow label="Wallet" fallback="Not connected" value={account?.address} />
+          <DetailRow label="Repo" fallback="Missing" value={params.owner && params.repo ? `${params.owner}/${params.repo}` : ""} />
+          <DetailRow label="Server" fallback="Missing" value={params.server} />
+        </div>
+        <div className="actions">
+          <ConnectButton>Connect Wallet</ConnectButton>
+          <button className="authorize-button" disabled={!account?.address || state === "working"} onClick={() => void unlock()} type="button">
+            {state === "working" ? "Unlocking" : "Unlock"}
+          </button>
+        </div>
+        {message && <p className={`status ${state}`}>{message}</p>}
+      </section>
+    </main>
+  );
+}
+
+function RepoAccessPanel() {
+  const account = useCurrentAccount();
+  const kit = useDAppKit();
+  const params = useMemo(queryParams, []);
+  const autoStarted = useRef(false);
+  const [state, setState] = useState<LoginState>("idle");
+  const [message, setMessage] = useState("");
+
+  const accessLabel = params.action === "remove" ? "Remove contributor" : "Add contributor";
+  const normalizedRole = params.role === "reader" ? "reader" : "writer";
+  const normalizedAction = params.action === "remove" ? "remove" : "add";
+
+  const executeAccessChange = useCallback(async () => {
+    if (!account?.address) {
+      setMessage("Connect a Sui wallet first.");
+      return;
+    }
+
+    if (!params.server || !params.packageId || !params.repoObjectId || !params.walletAddress) {
+      setState("error");
+      setMessage("Missing repository access transaction parameters.");
+      return;
+    }
+
+    if (params.ownerWallet && account.address.toLowerCase() !== params.ownerWallet.toLowerCase()) {
+      setState("error");
+      setMessage("Connect the repository owner wallet to manage contributors.");
+      return;
+    }
+
+    setState("working");
+    setMessage("Preparing contributor transaction...");
+
+    try {
+      const functionName =
+        normalizedAction === "remove"
+          ? normalizedRole === "reader" ? "remove_reader" : "remove_member"
+          : normalizedRole === "reader" ? "add_reader" : "add_member";
+      const tx = new Transaction();
+      tx.setSender(account.address);
+      tx.moveCall({
+        target: `${params.packageId}::registry::${functionName}`,
+        arguments: [
+          tx.object(params.repoObjectId),
+          tx.pure.address(params.walletAddress)
+        ]
+      });
+
+      setMessage("Approve the contributor change in your wallet.");
+      const result = await (kit as unknown as {
+        signAndExecuteTransaction: (input: { transaction: Transaction }) => Promise<{ digest?: string } | null>;
+      }).signAndExecuteTransaction({ transaction: tx });
+      if (!result) {
+        throw new Error("Wallet did not return a transaction result");
+      }
+
+      setMessage("Waiting for Sui confirmation...");
+      await waitForDigest(result.digest);
+
+      setState("success");
+      setMessage("Contributor access updated.");
+      finishBrowserFlow(params, params.returnTo || `/${params.owner}/${params.repo}/settings/access`);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      setState("error");
+      setMessage(text);
+      if (params.embedded) {
+        notifyBrowserHost(params, "octopus-auth-error", { message: text });
+      }
+    }
+  }, [account, kit, normalizedAction, normalizedRole, params]);
+
+  useEffect(() => {
+    if (!params.autoStart || autoStarted.current || !account?.address || state !== "idle") {
+      return;
+    }
+    autoStarted.current = true;
+    void executeAccessChange();
+  }, [account?.address, executeAccessChange, params.autoStart, state]);
+
+  useEffect(() => {
+    if (!params.embedded || !params.autoStart || account?.address || state !== "idle" || autoStarted.current) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (!account?.address && !autoStarted.current) {
+        notifyBrowserHost(params, "octopus-auth-needs-wallet");
+      }
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [account?.address, params, state]);
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-card" aria-label="Octopus repository access">
+        <h1>{accessLabel}</h1>
+        <div className="detail-list">
+          <DetailRow label="Wallet" fallback="Not connected" value={account?.address} />
+          <DetailRow label="Repo" fallback="Missing" value={params.owner && params.repo ? `${params.owner}/${params.repo}` : ""} />
+          <DetailRow label="Contributor" fallback="Missing" value={params.walletAddress} />
+          <DetailRow label="Role" fallback="Writer" value={normalizedRole} />
+        </div>
+        <div className="actions">
+          <ConnectButton>Connect Wallet</ConnectButton>
+          <button className="authorize-button" disabled={!account?.address || state === "working"} onClick={() => void executeAccessChange()} type="button">
+            {state === "working" ? "Updating" : accessLabel}
+          </button>
+        </div>
+        {message && <p className={`status ${state}`}>{message}</p>}
+      </section>
+    </main>
+  );
+}
+
 export function App() {
+  const params = queryParams();
+  const mode = authPanelMode(params.mode);
+
   return (
     <DAppKitProvider dAppKit={dAppKit}>
-      <LoginPanel />
+      <div className={params.embedded ? "embedded-auth" : undefined}>
+        {mode === "access"
+          ? <RepoAccessPanel />
+          : mode === "unlock"
+            ? <UnlockRepoPanel />
+            : mode === "web"
+              ? <WebLoginPanel />
+              : <LoginPanel />}
+      </div>
     </DAppKitProvider>
   );
 }

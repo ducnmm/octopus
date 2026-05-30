@@ -81,13 +81,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-test("repo create sends a public visibility payload by default", async () => {
+test("repo create lets the server choose the owner namespace by default", async () => {
   const fetchImpl = vi.fn(async () =>
     okJson({
-      owner: "ducnmm",
+      owner: "0xabc",
       name: "demo",
       visibility: "public",
-      gitRemotePath: "/ducnmm/demo.git"
+      gitRemotePath: "/0xabc/demo.git"
     }, 201)
   ) as unknown as OctopusFetch;
   const { context, stdout } = createContext(fetchImpl);
@@ -98,13 +98,33 @@ test("repo create sends a public visibility payload by default", async () => {
   const [url, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
   expect(String(url)).toBe("http://127.0.0.1:48787/v1/repos");
   expect(JSON.parse(String(init?.body))).toEqual({
-    owner: "ducnmm",
     name: "demo",
     visibility: "public"
   });
-  expect(stdout.output()).toContain("Created ducnmm/demo (public)");
-  expect(stdout.output()).toContain("Next: git remote add origin http://127.0.0.1:48787/ducnmm/demo.git");
+  expect(stdout.output()).toContain("Created 0xabc/demo (public)");
+  expect(stdout.output()).toContain("Next: git remote add origin http://127.0.0.1:48787/0xabc/demo.git");
   expect(stdout.output()).toContain("Next: git push origin main");
+});
+
+test("repo create supports an explicit owner namespace", async () => {
+  const fetchImpl = vi.fn(async () =>
+    okJson({
+      owner: "ducnmm.sui",
+      name: "demo",
+      visibility: "public",
+      gitRemotePath: "/ducnmm.sui/demo.git"
+    }, 201)
+  ) as unknown as OctopusFetch;
+  const { context } = createContext(fetchImpl);
+
+  await runCli(["repo", "create", "demo", "--owner", "ducnmm.sui"], context);
+
+  const [, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
+  expect(JSON.parse(String(init?.body))).toEqual({
+    owner: "ducnmm.sui",
+    name: "demo",
+    visibility: "public"
+  });
 });
 
 test("repo create supports explicit private visibility", async () => {
@@ -121,7 +141,8 @@ test("repo create supports explicit private visibility", async () => {
   await runCli(["repo", "create", "demo", "--private"], context);
 
   const [, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
-  expect(JSON.parse(String(init?.body))).toMatchObject({
+  expect(JSON.parse(String(init?.body))).toEqual({
+    name: "demo",
     visibility: "private"
   });
 });
@@ -140,7 +161,8 @@ test("repo create keeps --private=false compatibility with the spec", async () =
   await runCli(["repo", "create", "demo", "--private=false"], context);
 
   const [, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
-  expect(JSON.parse(String(init?.body))).toMatchObject({
+  expect(JSON.parse(String(init?.body))).toEqual({
+    name: "demo",
     visibility: "public"
   });
 });
@@ -190,6 +212,48 @@ test("repo restore calls the restore endpoint and prints the result", async () =
   expect(init?.method).toBe("POST");
   expect(stdout.output()).toContain("Restored ducnmm/demo");
   expect(stdout.output()).toContain("source:   sui-local");
+});
+
+test("pr create opens a pull request", async () => {
+  const fetchImpl = vi.fn(async () =>
+    okJson({
+      pullRequest: {
+        number: 1,
+        title: "Add feature",
+        baseRef: "refs/heads/main",
+        headRef: "refs/heads/feature",
+        status: "open"
+      }
+    }, 201)
+  ) as unknown as OctopusFetch;
+  const { context, stdout } = createContext(fetchImpl);
+
+  await runCli([
+    "pr",
+    "create",
+    "ducnmm/demo",
+    "--base",
+    "main",
+    "--head",
+    "feature",
+    "--title",
+    "Add feature",
+    "--body",
+    "Ready for review"
+  ], context);
+
+  const [url, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
+  expect(String(url)).toBe("http://127.0.0.1:48787/v1/repos/ducnmm/demo/pulls");
+  expect(init?.method).toBe("POST");
+  expect(JSON.parse(String(init?.body))).toEqual({
+    title: "Add feature",
+    body: "Ready for review",
+    baseRef: "main",
+    headRef: "feature"
+  });
+  expect(stdout.output()).toContain("Created pull request #1 ducnmm/demo");
+  expect(stdout.output()).toContain("base:  main");
+  expect(stdout.output()).toContain("head:  feature");
 });
 
 test("auth login accepts the wallet callback and writes credentials", async () => {

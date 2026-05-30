@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AuthContext } from "./auth.js";
 import { readRepoManifests, type PackManifest } from "./artifacts.js";
 import type { ServerConfig } from "./config.js";
-import { bareRepoPath } from "./git.js";
+import { bareRepoPath, setBareRepositoryHead } from "./git.js";
 import { decryptArtifactForRepo } from "./seal.js";
 import { readSuiRepoManifestsWithSource } from "./sui.js";
 import { readArtifact } from "./walrus.js";
@@ -116,48 +116,87 @@ export const restoreRepository = async (
   }
 
   const tmpRestoreDir = await mkdtemp(join(tmpdir(), "octopus-restore-"));
+  const repoPath = bareRepoPath(config.repoRoot, owner, repo);
+  const repoParent = dirname(repoPath);
+  let tempRepoPath: string | null = null;
+  let backupRepoPath: string | null = null;
+  let restoredCommit = "";
+
   const bundlePath =
     manifest.encrypted && manifest.sealEnvelope
       ? join(tmpRestoreDir, "snapshot.bundle")
       : artifact.artifactPath;
-  if (manifest.encrypted && manifest.sealEnvelope) {
-    await decryptArtifactForRepo({
-      sourcePath: artifact.artifactPath,
-      outputPath: bundlePath,
-      repoId: manifest.repoId,
-      envelope: manifest.sealEnvelope,
-      accountId: auth?.accountId,
-      serverSuiPrivateKey: config.serverSuiPrivateKeys[0],
-      suiRpcUrl: config.suiRpcUrl,
-      suiNetwork: config.suiNetwork,
-      sealServerConfigs: config.sealServerConfigs,
-      sealKeyServers: config.sealKeyServers,
-      sealThreshold: config.sealThreshold
-    });
-    const plaintextDigest = await sha256File(bundlePath);
-    if (plaintextDigest !== manifest.artifactDigest) {
-      throw new Error(`Decrypted artifact digest mismatch: expected ${manifest.artifactDigest}, got ${plaintextDigest}`);
-    }
-  }
 
-  const repoPath = bareRepoPath(config.repoRoot, owner, repo);
   try {
-    await rm(repoPath, { recursive: true, force: true });
-    await mkdir(dirname(repoPath), { recursive: true });
-    await runGit(["clone", "--bare", bundlePath, repoPath]);
-    await runGit(["--git-dir", repoPath, "config", "http.receivepack", "true"]);
-    await runGit(["--git-dir", repoPath, "config", "octopus.owner", owner]);
-    await runGit(["--git-dir", repoPath, "config", "octopus.name", repo]);
+    if (manifest.encrypted && manifest.sealEnvelope) {
+      await decryptArtifactForRepo({
+        sourcePath: artifact.artifactPath,
+        outputPath: bundlePath,
+        repoId: manifest.repoId,
+        envelope: manifest.sealEnvelope,
+        accountId: auth?.accountId,
+        serverSuiPrivateKey: config.serverSuiPrivateKeys[0],
+        suiRpcUrl: config.suiRpcUrl,
+        suiNetwork: config.suiNetwork,
+        sealServerConfigs: config.sealServerConfigs,
+        sealKeyServers: config.sealKeyServers,
+        sealThreshold: config.sealThreshold
+      });
+      const plaintextDigest = await sha256File(bundlePath);
+      if (plaintextDigest !== manifest.artifactDigest) {
+        throw new Error(`Decrypted artifact digest mismatch: expected ${manifest.artifactDigest}, got ${plaintextDigest}`);
+      }
+    }
+
+    await mkdir(repoParent, { recursive: true });
+    tempRepoPath = await mkdtemp(join(repoParent, `.${repo}.restore-`));
+    await runGit(["clone", "--bare", bundlePath, tempRepoPath]);
+    await setBareRepositoryHead(tempRepoPath, manifest.refName);
+    await runGit(["--git-dir", tempRepoPath, "config", "http.receivepack", "true"]);
+    await runGit(["--git-dir", tempRepoPath, "config", "octopus.owner", owner]);
+    await runGit(["--git-dir", tempRepoPath, "config", "octopus.name", repo]);
+
+    restoredCommit = (await runGit(["--git-dir", tempRepoPath, "rev-parse", manifest.refName])).stdout
+      .toString("utf8")
+      .trim();
+
+    if (restoredCommit !== manifest.newCommit) {
+      throw new Error(`Restored ref mismatch: expected ${manifest.newCommit}, got ${restoredCommit}`);
+    }
+
+    backupRepoPath = join(repoParent, `.${repo}.backup-${Date.now()}-${process.pid}.git`);
+    try {
+      await rename(repoPath, backupRepoPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      backupRepoPath = null;
+    }
+
+    try {
+      await rename(tempRepoPath, repoPath);
+      tempRepoPath = null;
+      if (backupRepoPath) {
+        await rm(backupRepoPath, { recursive: true, force: true });
+        backupRepoPath = null;
+      }
+    } catch (error) {
+      if (backupRepoPath) {
+        await rm(repoPath, { recursive: true, force: true });
+        await rename(backupRepoPath, repoPath);
+        backupRepoPath = null;
+      }
+      throw error;
+    }
   } finally {
     await rm(tmpRestoreDir, { recursive: true, force: true });
-  }
-
-  const restoredCommit = (await runGit(["--git-dir", repoPath, "rev-parse", manifest.refName])).stdout
-    .toString("utf8")
-    .trim();
-
-  if (restoredCommit !== manifest.newCommit) {
-    throw new Error(`Restored ref mismatch: expected ${manifest.newCommit}, got ${restoredCommit}`);
+    if (tempRepoPath) {
+      await rm(tempRepoPath, { recursive: true, force: true });
+    }
+    if (backupRepoPath) {
+      await rm(backupRepoPath, { recursive: true, force: true });
+    }
   }
 
   return {
