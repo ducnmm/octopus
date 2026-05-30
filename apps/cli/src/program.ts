@@ -204,11 +204,16 @@ const fetchAuthServerConfig = async (
   }
 };
 
+type RunGitOptions = {
+  timeoutMs?: number;
+};
+
 const runGit = async (
   args: string[],
   cwd?: string,
   input?: string,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  options: RunGitOptions = {}
 ): Promise<string> => {
   return await new Promise((resolvePromise, reject) => {
     const child = spawn("git", args, {
@@ -218,11 +223,40 @@ const runGit = async (
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    let timedOut = false;
+    let timeout: NodeJS.Timeout | undefined;
+    let forceKillTimeout: NodeJS.Timeout | undefined;
+
+    const clearTimers = (): void => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
+    };
+
+    if (options.timeoutMs) {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+        forceKillTimeout = setTimeout(() => child.kill("SIGKILL"), 250);
+      }, options.timeoutMs);
+    }
 
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", reject);
+    child.on("error", (error) => {
+      clearTimers();
+      reject(error);
+    });
     child.on("close", (code) => {
+      clearTimers();
+      if (timedOut) {
+        reject(new Error(`git ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        return;
+      }
+
       if (code === 0) {
         resolvePromise(Buffer.concat(stdout).toString("utf8").trim());
         return;
@@ -234,6 +268,14 @@ const runGit = async (
     child.stdin.end(input);
   });
 };
+
+const nonInteractiveGitEnv = (): NodeJS.ProcessEnv => ({
+  ...process.env,
+  GCM_INTERACTIVE: "never",
+  GIT_ASKPASS: "false",
+  GIT_TERMINAL_PROMPT: "0",
+  SSH_ASKPASS: "false"
+});
 
 const currentGitRemoteUrl = async (
   cwd: string | undefined,
@@ -321,10 +363,13 @@ const fillGitCredential = async (
   serverUrl: string,
   cwd: string | undefined
 ): Promise<string> => {
-  return await runGit(["credential", "fill"], cwd, gitCredentialInput(serverUrl), {
-    ...process.env,
-    GIT_TERMINAL_PROMPT: "0"
-  });
+  return await runGit(
+    ["credential", "fill"],
+    cwd,
+    gitCredentialInput(serverUrl),
+    nonInteractiveGitEnv(),
+    { timeoutMs: 2_000 }
+  );
 };
 
 const startLoginCallbackServer = async (input: {

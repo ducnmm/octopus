@@ -409,18 +409,28 @@ test("auth logout removes saved credentials and rejects Git credential", async (
 
 test("doctor reports unreachable server and missing credentials", async () => {
   const home = await mkdtemp(join(tmpdir(), "octopus-cli-home-"));
+  const fakeBin = await mkdtemp(join(tmpdir(), "octopus-cli-bin-"));
+  await writeFile(join(fakeBin, "git"), `#!/bin/sh\nif [ "$1" = "--version" ]; then\n  printf 'git version test\\n'\n  exit 0\nfi\nif [ "$1 $2" = "credential fill" ]; then\n  cat >/dev/null\n  exit 1\nfi\nif [ "$1 $2 $3" = "remote get-url origin" ]; then\n  exit 1\nfi\nexit 1\n`);
+  await chmod(join(fakeBin, "git"), 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}:${originalPath ?? ""}`;
   const fetchImpl = vi.fn(async () => {
     throw new Error("offline");
   }) as unknown as OctopusFetch;
   const { context, stderr, stdout } = createContext(fetchImpl);
   context.home = home;
 
-  await runCli(["doctor", "--server", "http://octopus.test"], context);
+  try {
+    await runCli(["doctor", "--server", "http://octopus.test"], context);
+  } finally {
+    process.env.PATH = originalPath;
+  }
 
   expect(process.exitCode).toBe(1);
   expect(stdout.output()).toContain("warn credentials not found");
   expect(stderr.output()).toContain("fail server is unreachable at http://octopus.test");
   await rm(home, { recursive: true, force: true });
+  await rm(fakeBin, { recursive: true, force: true });
 });
 
 test("doctor reports Git credential and remote/server mismatch", async () => {
