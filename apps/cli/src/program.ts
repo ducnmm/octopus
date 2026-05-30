@@ -529,6 +529,7 @@ export const createProgram = (context: CliContext): Command => {
       });
 
       const loginUrl = new URL("/login", webUrl);
+      loginUrl.searchParams.set("mode", "cli");
       loginUrl.searchParams.set("callback", callback.callbackUrl);
       loginUrl.searchParams.set("server", serverUrl);
       loginUrl.searchParams.set("delegatePublicKey", identity.delegatePublicKey);
@@ -916,7 +917,8 @@ export const runCli = async (
   program.exitOverride();
 
   try {
-    await program.parseAsync(argv, { from: "user" });
+    const forwardedArgv = argv[0] === "--" ? argv.slice(1) : argv;
+    await program.parseAsync(forwardedArgv, { from: "user" });
   } catch (error) {
     if (error instanceof Error && error.name === "CommanderError") {
       const exitCode = (error as Error & { exitCode?: number }).exitCode;

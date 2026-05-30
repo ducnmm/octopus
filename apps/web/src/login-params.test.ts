@@ -8,10 +8,10 @@ const defaults: LoginRuntimeDefaults = {
 };
 
 describe("login params", () => {
-  it("defaults to CLI mode and runtime registry IDs", () => {
+  it("defaults to web mode and runtime registry IDs", () => {
     const params = loginParamsFromSearch("", defaults);
 
-    expect(authPanelMode(params.mode)).toBe("cli");
+    expect(authPanelMode(params.mode)).toBe("web");
     expect(params.autoStart).toBe(false);
     expect(params.embedded).toBe(false);
     expect(params.returnTo).toBe("/");

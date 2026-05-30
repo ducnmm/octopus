@@ -35,7 +35,7 @@ export const loginParamsFromSearch = (
 ): LoginParams => {
   const params = new URLSearchParams(search);
   return {
-    mode: params.get("mode") ?? "cli",
+    mode: params.get("mode") ?? "web",
     autoStart: params.get("autostart") === "1",
     embedded: params.get("embed") === "1",
     callback: params.get("callback") ?? "",

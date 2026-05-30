@@ -285,6 +285,7 @@ test("auth login accepts the wallet callback and writes credentials", async () =
   );
   const [, openUrl] = await waitForMatch(stdout.output, /Open: (http:\/\/web\.test\/login\?\S+)/);
   const state = new URL(openUrl!).searchParams.get("state");
+  expect(new URL(openUrl!).searchParams.get("mode")).toBe("cli");
   expect(state).toMatch(/^[0-9a-f]{32}$/);
   const staleResponse = await fetch(callbackUrl!, {
     method: "POST",
@@ -333,6 +334,23 @@ test("auth login accepts the wallet callback and writes credentials", async () =
   expect(credential).toContain("password=");
   await rm(home, { recursive: true, force: true });
   await rm(fakeBin, { recursive: true, force: true });
+});
+
+test("runCli accepts pnpm forwarded separator", async () => {
+  const fetchImpl = vi.fn(async () =>
+    okJson({
+      owner: "0xabc",
+      name: "demo",
+      visibility: "public",
+      gitRemotePath: "/0xabc/demo.git"
+    }, 201)
+  ) as unknown as OctopusFetch;
+  const { context, stdout } = createContext(fetchImpl);
+
+  await runCli(["--", "repo", "create", "demo"], context);
+
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(stdout.output()).toContain("Created 0xabc/demo (public)");
 });
 
 test("repo connect writes remote URL and sync-auth refreshes signed delegate token header", async () => {
