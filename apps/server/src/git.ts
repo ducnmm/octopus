@@ -10,6 +10,7 @@ import { indexRepository } from "./indexer.js";
 import { restoreRepository } from "./restore.js";
 import { anchorDeletedRefs, anchorPushManifests, canReadRepo, canWriteRepo, readSuiRepoState, readSuiRepoStateForAuthorization } from "./sui.js";
 import { recordPushAttempt } from "./push-attempts.js";
+import { serializeError } from "./error-details.js";
 
 type GitResult = {
   stdout: Buffer;
@@ -346,7 +347,8 @@ export const handleGitHttp = async (
         walrusOwnerAddress: repoState?.ownerWallet ?? auth?.walletAddress,
         sealServerConfigs: config.sealServerConfigs,
         sealKeyServers: config.sealKeyServers,
-        sealThreshold: config.sealThreshold
+        sealThreshold: config.sealThreshold,
+        logger: request.log
       });
       if (manifests.length > 0 || refDeletions.length > 0) {
         const anchors = await anchorPushManifests(config, manifests, auth);
@@ -374,11 +376,21 @@ export const handleGitHttp = async (
         }
       }
     } catch (error) {
+      const errorDetails = serializeError(error);
+      request.log.error({
+        owner: repoRef.owner,
+        repo: repoRef.repo,
+        actor: auth?.walletAddress,
+        suiMode: config.suiMode,
+        walrusMode: process.env.OCTOPUS_WALRUS_MODE ?? "local",
+        error: errorDetails
+      }, "git receive-pack post-processing failed");
       await recordPushAttempt(config, {
         owner: repoRef.owner,
         repo: repoRef.repo,
         status: "failed",
         error: error instanceof Error ? error.message : String(error),
+        errorDetails,
         actor: auth?.walletAddress,
         createdAtMs: Date.now()
       });

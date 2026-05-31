@@ -7,6 +7,7 @@ import { Transaction } from "@mysten/sui/transactions";
 import { fromHex } from "@mysten/sui/utils";
 import { WalrusClient, blobIdFromInt } from "@mysten/walrus";
 import { envInt } from "@octopus/shared";
+import { serializeError } from "./error-details.js";
 
 type WalrusStorageMode = "local" | "walrus-cli" | "walrus-relay";
 
@@ -45,6 +46,18 @@ type RelaySigner = {
   keypair: Ed25519Keypair;
   client: SuiJsonRpcClient;
   address: string;
+};
+
+type WalrusLogger = {
+  info: (bindings: Record<string, unknown>, message?: string) => void;
+  error: (bindings: Record<string, unknown>, message?: string) => void;
+};
+
+type WalrusLogContext = Record<string, unknown>;
+
+type WalrusLogInput = {
+  logger?: WalrusLogger;
+  logContext?: WalrusLogContext;
 };
 
 const DEFAULT_WALRUS_EPOCHS = 50;
@@ -149,6 +162,53 @@ const defaultRelayUrl = (network: WalrusNetwork): string => {
   return network === "mainnet"
     ? "https://upload-relay.mainnet.walrus.space"
     : "https://upload-relay.testnet.walrus.space";
+};
+
+const walrusStepBindings = (
+  input: WalrusLogInput,
+  step: string,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> => ({
+  ...input.logContext,
+  step,
+  ...extra
+});
+
+const logWalrusInfo = (
+  input: WalrusLogInput,
+  step: string,
+  message: string,
+  extra: Record<string, unknown> = {}
+): void => {
+  input.logger?.info(walrusStepBindings(input, step, extra), message);
+};
+
+const runWalrusStep = async <T>(
+  input: WalrusLogInput,
+  step: string,
+  task: () => Promise<T>,
+  extra: Record<string, unknown> = {}
+): Promise<T> => {
+  const startedAtMs = Date.now();
+  logWalrusInfo(input, step, "walrus step started", extra);
+  try {
+    const result = await task();
+    logWalrusInfo(input, step, "walrus step completed", {
+      ...extra,
+      durationMs: Date.now() - startedAtMs
+    });
+    return result;
+  } catch (error) {
+    input.logger?.error(
+      walrusStepBindings(input, step, {
+        ...extra,
+        durationMs: Date.now() - startedAtMs,
+        error: serializeError(error)
+      }),
+      "walrus step failed"
+    );
+    throw error;
+  }
 };
 
 const buildKeypairFromSecret = (raw: string): Ed25519Keypair => {
@@ -310,40 +370,67 @@ const storeWithWalrusRelay = async (
     serverSuiPrivateKeys?: string[];
     metadata?: WalrusBlobMetadata;
     walrusOwnerAddress?: string;
-  }
+  } & WalrusLogInput
 ): Promise<WalrusStoreResult> => {
   const epochs = envInt(process.env.OCTOPUS_WALRUS_EPOCHS, DEFAULT_WALRUS_EPOCHS);
   const signer = relaySigner(input);
+  const network = normalizeWalrusNetwork(input.walrusNetwork ?? process.env.WALRUS_NETWORK);
+  const relayUrl = (input.walrusUploadRelayUrl ?? process.env.WALRUS_UPLOAD_RELAY_URL ?? defaultRelayUrl(network))
+    .replace(/\/+$/, "");
+  logWalrusInfo(input, "relay.init", "walrus relay upload initialized", {
+    epochs,
+    network,
+    relayUrl,
+    signerAddress: signer.address,
+    requestedOwnerAddress: input.walrusOwnerAddress
+  });
   const walrus = relayClient({
     signer,
     walrusNetwork: input.walrusNetwork,
     walrusUploadRelayUrl: input.walrusUploadRelayUrl
   });
-  const content = await readFile(artifactPath);
+  const content = await runWalrusStep(input, "relay.read-artifact", () => readFile(artifactPath), {
+    artifactPath
+  });
   const flow = walrus.writeBlobFlow({
     blob: new Uint8Array(content)
   });
 
-  await flow.encode();
+  await runWalrusStep(input, "relay.encode", () => flow.encode(), {
+    artifactSizeBytes: content.byteLength
+  });
 
   const attributes = input.metadata && Object.keys(input.metadata).length > 0 ? input.metadata : undefined;
-  const registerDigest = await executeWalrusTransaction(
-    signer,
-    flow.register({
-      epochs,
-      owner: signer.address,
-      deletable: true,
-      attributes
-    })
-  );
-  await signer.client.waitForTransaction({ digest: registerDigest });
+  const registerDigest = await runWalrusStep(input, "relay.register", async () => {
+    return await executeWalrusTransaction(
+      signer,
+      flow.register({
+        epochs,
+        owner: signer.address,
+        deletable: true,
+        attributes
+      })
+    );
+  }, {
+    attributeCount: attributes ? Object.keys(attributes).length : 0
+  });
+  await runWalrusStep(input, "relay.wait-register", () => signer.client.waitForTransaction({ digest: registerDigest }), {
+    digest: registerDigest
+  });
 
-  await flow.upload({ digest: registerDigest });
+  await runWalrusStep(input, "relay.upload", () => flow.upload({ digest: registerDigest }), {
+    digest: registerDigest,
+    relayUrl
+  });
 
-  const certifyDigest = await executeWalrusTransaction(signer, flow.certify());
-  await signer.client.waitForTransaction({ digest: certifyDigest });
+  const certifyDigest = await runWalrusStep(input, "relay.certify", async () => {
+    return await executeWalrusTransaction(signer, flow.certify());
+  });
+  await runWalrusStep(input, "relay.wait-certify", () => signer.client.waitForTransaction({ digest: certifyDigest }), {
+    digest: certifyDigest
+  });
 
-  const blob = await flow.getBlob();
+  const blob = await runWalrusStep(input, "relay.get-blob", () => flow.getBlob());
   const rawBlobId = String(blob.blobId ?? "");
   const blobId = /^\d+$/.test(rawBlobId) ? blobIdFromInt(rawBlobId) : rawBlobId;
   const blobObjectId = objectIdString(blob.blobObject?.id);
@@ -354,8 +441,18 @@ const storeWithWalrusRelay = async (
   const finalOwner = isSuiAddress(input.walrusOwnerAddress) ? input.walrusOwnerAddress : signer.address;
   const ownershipTransferred = finalOwner !== signer.address;
   if (ownershipTransferred) {
-    await transferBlobObject(signer, blobObjectId, finalOwner);
+    await runWalrusStep(input, "relay.transfer-owner", () => transferBlobObject(signer, blobObjectId, finalOwner), {
+      blobObjectId,
+      finalOwner
+    });
   }
+
+  logWalrusInfo(input, "relay.complete", "walrus relay upload completed", {
+    blobId,
+    blobObjectId,
+    finalOwner,
+    ownershipTransferred
+  });
 
   return {
     blobId,
@@ -395,17 +492,26 @@ export const storeArtifact = async (input: {
   suiRpcUrl?: string;
   serverSuiPrivateKeys?: string[];
   walrusOwnerAddress?: string;
-}): Promise<ArtifactStoreResult> => {
+} & WalrusLogInput): Promise<ArtifactStoreResult> => {
   const blobDir = join(input.dataDir, "walrus", "blobs");
   await mkdir(blobDir, { recursive: true });
 
   const storedArtifactPath = join(blobDir, `${input.artifactDigest}.bundle`);
   await copyFile(input.sourcePath, storedArtifactPath);
+  logWalrusInfo(input, "artifact.copy", "artifact copied into walrus cache", {
+    sourcePath: input.sourcePath,
+    storedArtifactPath,
+    artifactDigest: input.artifactDigest
+  });
   if (input.metadata) {
     await writeFile(
       join(blobDir, `${input.artifactDigest}.metadata.json`),
       `${JSON.stringify(input.metadata, null, 2)}\n`
     );
+    logWalrusInfo(input, "artifact.metadata", "artifact metadata written", {
+      artifactDigest: input.artifactDigest,
+      metadataKeys: Object.keys(input.metadata)
+    });
   }
 
   const walrusMode = process.env.OCTOPUS_WALRUS_MODE;

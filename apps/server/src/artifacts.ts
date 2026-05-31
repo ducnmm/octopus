@@ -14,6 +14,11 @@ import { tmpdir } from "node:os";
 import { encryptArtifactForRepo, type SealEnvelope } from "./seal.js";
 import { storeArtifact, type WalrusBlobMetadata } from "./walrus.js";
 
+type ArtifactLogger = {
+  info: (bindings: Record<string, unknown>, message?: string) => void;
+  error: (bindings: Record<string, unknown>, message?: string) => void;
+};
+
 export type GitRefMap = Map<string, string>;
 
 export type GitRefChange = {
@@ -193,6 +198,7 @@ export const createPushArtifacts = async (input: {
   sealServerConfigs?: string;
   sealKeyServers?: string[];
   sealThreshold?: number;
+  logger?: ArtifactLogger;
 }): Promise<PackManifest[]> => {
   const refs = changedRefs(input.beforeRefs, input.afterRefs);
   if (refs.length === 0) {
@@ -268,7 +274,19 @@ export const createPushArtifacts = async (input: {
       walrusUploadRelayUrl: input.walrusUploadRelayUrl,
       suiRpcUrl: input.suiRpcUrl,
       serverSuiPrivateKeys: input.serverSuiPrivateKeys,
-      walrusOwnerAddress: input.walrusOwnerAddress
+      walrusOwnerAddress: input.walrusOwnerAddress,
+      logger: input.logger,
+      logContext: {
+        owner: input.owner,
+        repo: input.repo,
+        repoId,
+        visibility,
+        artifactDigest: storedDigest,
+        originalArtifactDigest: digest,
+        walrusMode: process.env.OCTOPUS_WALRUS_MODE ?? "local",
+        walrusNetwork: input.walrusNetwork,
+        refCount: plannedRefs.length
+      }
     });
 
     const manifests: PackManifest[] = [];

@@ -9,6 +9,7 @@ export type PushAttempt = {
   manifestIds?: string[];
   actor?: string;
   error?: string;
+  errorDetails?: Record<string, unknown>;
   createdAtMs: number;
 };
 
