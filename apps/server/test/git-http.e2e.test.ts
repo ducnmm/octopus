@@ -163,7 +163,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await server.close();
-  await rm(workspace, { force: true, recursive: true });
+  await rm(workspace, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
 });
 
 test("serves normal git push and clone through smart HTTP", async () => {
