@@ -5,7 +5,7 @@ import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { Transaction } from "@mysten/sui/transactions";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { keypairFromPrivateKey, type AuthContext } from "./auth.js";
-import { readRepoManifests, type PackManifest } from "./artifacts.js";
+import { localManifestId, readRepoManifests, removeRepoManifests, writeRepoManifest, type PackManifest } from "./artifacts.js";
 import type { ServerConfig } from "./config.js";
 
 export type SuiRefState = {
@@ -296,14 +296,39 @@ const createTestnetRepo = async (
   return String(repoObject.objectId);
 };
 
-const assertExpectedOldCommit = (state: SuiRepoState, manifest: PackManifest): void => {
+const nextStateManifestSeq = (state: SuiRepoState): number => {
+  return state.manifests.reduce((max, manifest) => Math.max(max, manifest.seq), 0) + 1;
+};
+
+const normalizeRecoverableSnapshotManifest = (
+  state: SuiRepoState,
+  manifest: PackManifest
+): PackManifest => {
   const current = state.refs[manifest.refName];
   const currentCommit = current?.commitDigest ?? null;
-  if (currentCommit !== manifest.oldCommit) {
-    throw new Error(
-      `Sui ref mismatch for ${state.repoId} ${manifest.refName}: expected old commit ${currentCommit}, manifest has ${manifest.oldCommit}`
-    );
+  if (currentCommit === manifest.oldCommit) {
+    return manifest;
   }
+
+  if (currentCommit === null && manifest.oldCommit && manifest.isSnapshot) {
+    const seq = nextStateManifestSeq(state);
+    const manifestId = localManifestId(seq, manifest.refName, manifest.artifactDigest);
+    return {
+      ...manifest,
+      oldCommit: null,
+      seq,
+      manifestId,
+      walrusMetadata: {
+        ...manifest.walrusMetadata,
+        octopus_manifest_id: manifestId,
+        octopus_seq: String(seq)
+      }
+    };
+  }
+
+  throw new Error(
+    `Sui ref mismatch for ${state.repoId} ${manifest.refName}: expected old commit ${currentCommit}, manifest has ${manifest.oldCommit}`
+  );
 };
 
 export const anchorPushManifests = async (
@@ -313,16 +338,16 @@ export const anchorPushManifests = async (
 ): Promise<SuiAnchorResult[]> => {
   const results: SuiAnchorResult[] = [];
 
-  for (const manifest of manifests) {
+  for (const manifestInput of manifests) {
     const state =
-      (await readRepoStateFile(config, manifest.owner, manifest.repo)) ??
+      (await readRepoStateFile(config, manifestInput.owner, manifestInput.repo)) ??
       (await ensureSuiRepo(config, {
-        owner: manifest.owner,
-        repo: manifest.repo,
+        owner: manifestInput.owner,
+        repo: manifestInput.repo,
         visibility: "public"
       }));
 
-    assertExpectedOldCommit(state, manifest);
+    const manifest = normalizeRecoverableSnapshotManifest(state, manifestInput);
 
     if (config.suiMode === "testnet") {
       await pushRefOnTestnet(config, state, manifest, auth);
@@ -339,6 +364,10 @@ export const anchorPushManifests = async (
           }
         }
       : manifest;
+    if (manifest !== manifestInput) {
+      await removeRepoManifests(config.dataDir, [manifestInput]);
+      await writeRepoManifest(config.dataDir, anchoredManifest);
+    }
     const updatedAtMs = Date.now();
     state.refs[manifest.refName] = {
       refName: manifest.refName,

@@ -5,7 +5,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { ownerNameSchema, repoNameSchema } from "@octopus/shared";
 import { parseDelegateAuth, type AuthContext } from "./auth.js";
 import type { ServerConfig } from "./config.js";
-import { createPushArtifacts, deletedRefs, listRefs } from "./artifacts.js";
+import { createPushArtifacts, deletedRefs, listRefs, removeRepoManifests, type PackManifest } from "./artifacts.js";
 import { indexRepository } from "./indexer.js";
 import { restoreRepository } from "./restore.js";
 import { anchorDeletedRefs, anchorPushManifests, canReadRepo, canWriteRepo, readSuiRepoState, readSuiRepoStateForAuthorization } from "./sui.js";
@@ -325,8 +325,9 @@ export const handleGitHttp = async (
       return;
     }
 
+    let manifests: PackManifest[] = [];
     try {
-      const manifests = await createPushArtifacts({
+      manifests = await createPushArtifacts({
         dataDir: config.dataDir,
         repoPath,
         owner: repoRef.owner,
@@ -385,6 +386,15 @@ export const handleGitHttp = async (
         walrusMode: process.env.OCTOPUS_WALRUS_MODE ?? "local",
         error: errorDetails
       }, "git receive-pack post-processing failed");
+      try {
+        await removeRepoManifests(config.dataDir, manifests);
+      } catch (cleanupError) {
+        request.log.warn({
+          owner: repoRef.owner,
+          repo: repoRef.repo,
+          error: serializeError(cleanupError)
+        }, "failed to clean up unanchored push manifests");
+      }
       await recordPushAttempt(config, {
         owner: repoRef.owner,
         repo: repoRef.repo,

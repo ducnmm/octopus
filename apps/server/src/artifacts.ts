@@ -59,6 +59,18 @@ export type PackManifest = {
   seq: number;
 };
 
+const refSlug = (refName: string): string => {
+  return refName.replace(/^refs\//, "").replace(/[^A-Za-z0-9._-]+/g, "-");
+};
+
+export const localManifestId = (
+  seq: number,
+  refName: string,
+  artifactDigest: string
+): string => {
+  return `${String(seq).padStart(8, "0")}-${refSlug(refName)}-${artifactDigest.slice(0, 12)}`;
+};
+
 type GitResult = {
   stdout: Buffer;
   stderr: Buffer;
@@ -140,10 +152,6 @@ const nextManifestSequence = async (manifestDir: string): Promise<number> => {
   } catch {
     return 1;
   }
-};
-
-const refSlug = (refName: string): string => {
-  return refName.replace(/^refs\//, "").replace(/[^A-Za-z0-9._-]+/g, "-");
 };
 
 export const changedRefs = (before: GitRefMap, after: GitRefMap): GitRefChange[] => {
@@ -246,7 +254,7 @@ export const createPushArtifacts = async (input: {
       return {
         ...ref,
         seq,
-        manifestId: `${String(seq).padStart(8, "0")}-${refSlug(ref.refName)}-${digest.slice(0, 12)}`
+        manifestId: localManifestId(seq, ref.refName, digest)
       };
     });
     const artifactWalrusMetadata: WalrusBlobMetadata = {
@@ -324,10 +332,7 @@ export const createPushArtifacts = async (input: {
         seq: ref.seq
       };
 
-      await writeFile(
-        join(manifestDir, `${ref.manifestId}.json`),
-        `${JSON.stringify(manifest, null, 2)}\n`
-      );
+      await writeRepoManifest(input.dataDir, manifest);
       manifests.push(manifest);
     }
 
@@ -335,6 +340,31 @@ export const createPushArtifacts = async (input: {
   } finally {
     await rm(tmpArtifactDir, { recursive: true, force: true });
   }
+};
+
+export const writeRepoManifest = async (
+  dataDir: string,
+  manifest: PackManifest
+): Promise<void> => {
+  const manifestDir = join(dataDir, "manifests", manifest.owner, manifest.repo);
+  await mkdir(manifestDir, { recursive: true });
+  await writeFile(
+    join(manifestDir, `${manifest.manifestId}.json`),
+    `${JSON.stringify(manifest, null, 2)}\n`
+  );
+};
+
+export const removeRepoManifests = async (
+  dataDir: string,
+  manifests: PackManifest[]
+): Promise<void> => {
+  await Promise.all(
+    manifests.map((manifest) =>
+      rm(join(dataDir, "manifests", manifest.owner, manifest.repo, `${manifest.manifestId}.json`), {
+        force: true
+      })
+    )
+  );
 };
 
 export const readRepoManifests = async (
