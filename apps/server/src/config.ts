@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { envInt } from "@octopus/shared";
+import { envInt } from "@ducnmm/octopus-shared";
 
 const loadDotenv = (): void => {
   let dir = process.cwd();

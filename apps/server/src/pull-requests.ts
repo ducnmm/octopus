@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { envInt, type CreatePullRequestRequest } from "@octopus/shared";
+import { envInt, type CreatePullRequestRequest } from "@ducnmm/octopus-shared";
 import type { AuthContext } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import { bareRepoPath } from "./git.js";

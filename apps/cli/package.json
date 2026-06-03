@@ -1,10 +1,27 @@
 {
-  "name": "@octopus/cli",
+  "name": "@ducnmm/octopus",
   "version": "0.1.0",
-  "private": true,
+  "description": "Command line client for the Octopus recoverable Git forge.",
   "type": "module",
+  "main": "./dist/program.js",
+  "types": "./dist/program.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/program.d.ts",
+      "import": "./dist/program.js"
+    }
+  },
   "bin": {
-    "octopus": "./dist/index.js"
+    "octopus": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -15,7 +32,7 @@
   },
   "dependencies": {
     "@mysten/sui": "^2.12.0",
-    "@octopus/shared": "workspace:*",
+    "@ducnmm/octopus-shared": "workspace:*",
     "commander": "^14.0.2"
   },
   "devDependencies": {

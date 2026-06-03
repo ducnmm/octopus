@@ -9,7 +9,7 @@ import {
   createRepoRequestSchema,
   delegateAuthHeaders,
   registerDelegateRequestSchema
-} from "@octopus/shared";
+} from "@ducnmm/octopus-shared";
 import { readRepoManifests } from "./artifacts.js";
 import {
   identityFromPrivateKey,

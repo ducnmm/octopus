@@ -30,6 +30,32 @@ Install dependencies:
 pnpm install
 ```
 
+## Published CLI
+
+The published CLI defaults to the hosted testnet server:
+
+```bash
+npm install -g @ducnmm/octopus
+octopus auth login
+octopus repo create demo --public
+```
+
+Set `OCTOPUS_SERVER_URL` or pass `--server` to target another server:
+
+```bash
+OCTOPUS_SERVER_URL=https://octopus-server.up.railway.app octopus repo create demo --public
+octopus repo connect <owner-from-create>/demo --server https://octopus-server.up.railway.app
+```
+
+Use `--dev` (or `-d`) to target the local development server and wallet login
+page:
+
+```bash
+octopus auth login --dev
+octopus repo create demo --dev
+octopus repo connect <owner-from-create>/demo --dev
+```
+
 Run the local server:
 
 ```bash

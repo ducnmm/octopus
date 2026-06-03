@@ -5,7 +5,7 @@ import {
   delegateAuthTokenMessage,
   type DelegateAuthToken,
   type OctopusCredentials
-} from "@octopus/shared";
+} from "@ducnmm/octopus-shared";
 
 export type DelegateIdentity = {
   delegatePrivateKey: string;

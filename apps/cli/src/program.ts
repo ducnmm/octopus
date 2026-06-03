@@ -9,7 +9,7 @@ import {
   createRepoRequestSchema,
   delegateAuthHeaders,
   type OctopusCredentials
-} from "@octopus/shared";
+} from "@ducnmm/octopus-shared";
 import { requestJson, type OctopusFetch } from "./client.js";
 import { credentialsPath, deleteCredentials, readCredentials, writeCredentials } from "./credentials.js";
 import { createDelegateAuthToken, generateDelegateIdentity, identityFromPrivateKey } from "./delegate.js";
@@ -32,16 +32,18 @@ type RepoCreateOptions = {
   owner?: string;
   private?: boolean | string;
   public?: boolean;
-  server: string;
+  server?: string;
+  dev?: boolean;
 };
 
 type RepoServerOptions = {
-  server: string;
+  server?: string;
+  dev?: boolean;
 };
 
 type AuthLoginOptions = {
-  server: string;
-  webUrl: string;
+  server?: string;
+  webUrl?: string;
   callbackPort?: string;
   timeoutMs?: string;
   delegatePrivateKey?: string;
@@ -49,11 +51,13 @@ type AuthLoginOptions = {
   accountRegistryId?: string;
   repoRegistryId?: string;
   browser?: boolean;
+  dev?: boolean;
 };
 
 type RepoConnectOptions = {
   remote: string;
-  server: string;
+  server?: string;
+  dev?: boolean;
 };
 
 type PullRequestCreateOptions = {
@@ -61,13 +65,15 @@ type PullRequestCreateOptions = {
   head: string;
   title: string;
   body?: string;
-  server: string;
+  server?: string;
+  dev?: boolean;
 };
 
 type AuthServerConfig = {
   suiMode: "local" | "testnet";
   suiNetwork: string;
   suiRpcUrl: string;
+  webUrl?: string;
   packageId?: string;
   accountRegistryId?: string;
   repoRegistryId?: string;
@@ -77,9 +83,54 @@ type AuthServerConfig = {
 
 const REST_AUTH_EXPIRES_IN_MS = 5 * 60 * 1000;
 const GIT_AUTH_EXPIRES_IN_MS = 30 * 24 * 60 * 60 * 1000;
+const hostedServerUrl = "https://octopus-server.up.railway.app";
+const hostedWebUrl = "https://octopus-app.up.railway.app";
+
+const normalizeBaseUrl = (url: string): string => {
+  return url.replace(/\/+$/, "");
+};
+
+const localServerUrl = (env: NodeJS.ProcessEnv): string => {
+  return `http://${env.OCTOPUS_HOST ?? "127.0.0.1"}:${env.OCTOPUS_PORT ?? "48787"}`;
+};
+
+const localWebUrl = (env: NodeJS.ProcessEnv): string => {
+  return normalizeBaseUrl(env.OCTOPUS_WEB_URL ?? "http://127.0.0.1:45173");
+};
 
 const defaultBaseUrl = (env: NodeJS.ProcessEnv): string => {
-  return `http://${env.OCTOPUS_HOST ?? "127.0.0.1"}:${env.OCTOPUS_PORT ?? "48787"}`;
+  if (env.OCTOPUS_SERVER_URL) {
+    return normalizeBaseUrl(env.OCTOPUS_SERVER_URL);
+  }
+
+  if (env.OCTOPUS_HOST || env.OCTOPUS_PORT) {
+    return localServerUrl(env);
+  }
+
+  return hostedServerUrl;
+};
+
+const defaultWebUrl = (env: NodeJS.ProcessEnv): string => {
+  if (env.OCTOPUS_WEB_URL) {
+    return normalizeBaseUrl(env.OCTOPUS_WEB_URL);
+  }
+
+  if (env.OCTOPUS_HOST || env.OCTOPUS_PORT) {
+    return localWebUrl(env);
+  }
+
+  return hostedWebUrl;
+};
+
+const serverUrlFromOptions = (
+  options: { server?: string; dev?: boolean },
+  env: NodeJS.ProcessEnv
+): string => {
+  return normalizeBaseUrl(options.server ?? (options.dev ? localServerUrl(env) : defaultBaseUrl(env)));
+};
+
+const normalizeCliArgs = (argv: string[]): string[] => {
+  return argv.map((arg) => (arg === "-dev" ? "--dev" : arg));
 };
 
 const writeLine = (stream: Pick<NodeJS.WriteStream, "write">, line = ""): void => {
@@ -151,10 +202,6 @@ const defaultOpenBrowser = (url: string): void => {
   execFile(command, args, () => {
     // Users can manually open the URL printed by the CLI if this fails.
   });
-};
-
-const normalizeBaseUrl = (url: string): string => {
-  return url.replace(/\/+$/, "");
 };
 
 const safeEqual = (left: string, right: string): boolean => {
@@ -347,7 +394,6 @@ const startLoginCallbackServer = async (input: {
 
 export const createProgram = (context: CliContext): Command => {
   const program = new Command();
-  const baseUrl = defaultBaseUrl(context.env);
 
   program
     .name("octopus")
@@ -366,8 +412,9 @@ export const createProgram = (context: CliContext): Command => {
   authCommand
     .command("login")
     .description("Start wallet-backed CLI login")
-    .option("--server <url>", "Octopus server URL", baseUrl)
-    .option("--web-url <url>", "Octopus web login URL", context.env.OCTOPUS_WEB_URL ?? "http://127.0.0.1:45173")
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server and web login")
+    .option("--web-url <url>", "Octopus web login URL", context.env.OCTOPUS_WEB_URL)
     .option("--callback-port <port>", "localhost callback port", "0")
     .option("--timeout-ms <ms>", "wallet approval timeout", "300000")
     .option("--delegate-private-key <key>", "reuse an existing delegate private key")
@@ -376,9 +423,11 @@ export const createProgram = (context: CliContext): Command => {
     .option("--repo-registry-id <id>", "Octopus repo registry object ID", context.env.OCTOPUS_REPO_REGISTRY_ID)
     .option("--no-browser", "print the login URL without opening a browser")
     .action(async (options: AuthLoginOptions) => {
-      const serverUrl = normalizeBaseUrl(options.server);
-      const webUrl = normalizeBaseUrl(options.webUrl);
+      const serverUrl = serverUrlFromOptions(options, context.env);
       const serverConfig = await fetchAuthServerConfig(context, serverUrl);
+      const webUrl = normalizeBaseUrl(
+        options.webUrl ?? (options.dev ? localWebUrl(context.env) : serverConfig?.webUrl ?? defaultWebUrl(context.env))
+      );
       const packageId = options.packageId ?? serverConfig?.packageId;
       const accountRegistryId = options.accountRegistryId ?? serverConfig?.accountRegistryId;
       const repoRegistryId = options.repoRegistryId ?? serverConfig?.repoRegistryId;
@@ -471,8 +520,10 @@ export const createProgram = (context: CliContext): Command => {
     .option("--owner <owner>", "repository owner namespace; defaults to primary SuiNS or wallet address", context.env.OCTOPUS_OWNER)
     .option("--public", "create a public repository")
     .option("--private [value]", "create a private repository; use --private=false for public compatibility")
-    .option("--server <url>", "Octopus server URL", baseUrl)
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
     .action(async (name: string, options: RepoCreateOptions) => {
+      const serverUrl = serverUrlFromOptions(options, context.env);
       const payload = createRepoRequestSchema.parse({
         owner: options.owner,
         name,
@@ -484,14 +535,14 @@ export const createProgram = (context: CliContext): Command => {
         name: string;
         visibility: string;
         gitRemotePath: string;
-      }>(new URL("/v1/repos", options.server).toString(), {
+      }>(new URL("/v1/repos", serverUrl).toString(), {
         fetch: context.fetch,
         method: "POST",
         headers: await authHeaders(context.home),
         body: JSON.stringify(payload)
       });
 
-      const remote = new URL(repo.gitRemotePath, options.server).toString();
+      const remote = new URL(repo.gitRemotePath, serverUrl).toString();
       writeLine(context.stdout, `Created ${repo.owner}/${repo.name} (${repo.visibility})`);
       writeLine(context.stdout, `Remote: ${remote}`);
     });
@@ -500,7 +551,8 @@ export const createProgram = (context: CliContext): Command => {
     .command("connect")
     .argument("<repo>", "repository in owner/name form")
     .option("--remote <name>", "Git remote name", "origin")
-    .option("--server <url>", "Octopus server URL", baseUrl)
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
     .description("Configure a Git remote and repo-local delegate key headers")
     .action(async (repo: string, options: RepoConnectOptions) => {
       const credentials = await readCredentials(context.home);
@@ -509,7 +561,8 @@ export const createProgram = (context: CliContext): Command => {
       }
 
       const { owner, name } = splitRepo(repo);
-      const remoteUrl = new URL(`/${owner}/${name}.git`, normalizeBaseUrl(options.server)).toString();
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      const remoteUrl = new URL(`/${owner}/${name}.git`, serverUrl).toString();
       await configureRemote(context.cwd, options.remote, remoteUrl, credentials);
       writeLine(context.stdout, `Connected ${repo}`);
       writeLine(context.stdout, `  remote: ${options.remote}`);
@@ -519,10 +572,12 @@ export const createProgram = (context: CliContext): Command => {
   repoCommand
     .command("manifests")
     .argument("<repo>", "repository in owner/name form")
-    .option("--server <url>", "Octopus server URL", baseUrl)
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
     .description("List local artifact manifests for a repository")
     .action(async (repo: string, options: RepoServerOptions) => {
       const { owner, name } = splitRepo(repo);
+      const serverUrl = serverUrlFromOptions(options, context.env);
       const response = await requestJson<{
         manifests: Array<{
           manifestId: string;
@@ -532,7 +587,7 @@ export const createProgram = (context: CliContext): Command => {
           artifactDigest: string;
           storageMode: string;
         }>;
-      }>(new URL(`/v1/repos/${owner}/${name}/manifests`, options.server).toString(), {
+      }>(new URL(`/v1/repos/${owner}/${name}/manifests`, serverUrl).toString(), {
         fetch: context.fetch,
         method: "GET",
         headers: await authHeaders(context.home)
@@ -555,6 +610,7 @@ export const createProgram = (context: CliContext): Command => {
 
   const restoreRepo = async (repo: string, options: RepoServerOptions) => {
     const { owner, name } = splitRepo(repo);
+    const serverUrl = serverUrlFromOptions(options, context.env);
     const response = await requestJson<{
       owner: string;
       repo: string;
@@ -565,7 +621,7 @@ export const createProgram = (context: CliContext): Command => {
       artifactDigest: string;
       storageMode: string;
       manifestSource: string;
-    }>(new URL(`/v1/repos/${owner}/${name}/restore`, options.server).toString(), {
+    }>(new URL(`/v1/repos/${owner}/${name}/restore`, serverUrl).toString(), {
       fetch: context.fetch,
       method: "POST",
       headers: await authHeaders(context.home)
@@ -584,14 +640,16 @@ export const createProgram = (context: CliContext): Command => {
   repoCommand
     .command("restore")
     .argument("<repo>", "repository in owner/name form")
-    .option("--server <url>", "Octopus server URL", baseUrl)
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
     .description("Restore a repository cache from durable storage")
     .action(restoreRepo);
 
   program
     .command("restore")
     .argument("<repo>", "repository in owner/name form")
-    .option("--server <url>", "Octopus server URL", baseUrl)
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
     .description("Restore a repository cache from durable storage")
     .action(restoreRepo);
 
@@ -606,10 +664,12 @@ export const createProgram = (context: CliContext): Command => {
     .requiredOption("--title <title>", "pull request title")
     .option("--base <ref>", "target branch; defaults to the repository default branch")
     .option("--body <body>", "pull request description", "")
-    .option("--server <url>", "Octopus server URL", baseUrl)
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
     .description("Open a pull request between two branches")
     .action(async (repo: string, options: PullRequestCreateOptions) => {
       const { owner, name } = splitRepo(repo);
+      const serverUrl = serverUrlFromOptions(options, context.env);
       const payload = createPullRequestRequestSchema.parse({
         title: options.title,
         body: options.body ?? "",
@@ -625,14 +685,14 @@ export const createProgram = (context: CliContext): Command => {
           headRef: string;
           status: string;
         };
-      }>(new URL(`/v1/repos/${owner}/${name}/pulls`, options.server).toString(), {
+      }>(new URL(`/v1/repos/${owner}/${name}/pulls`, serverUrl).toString(), {
         fetch: context.fetch,
         method: "POST",
         headers: await authHeaders(context.home),
         body: JSON.stringify(payload)
       });
 
-      const href = new URL(`/${owner}/${name}/pulls/${response.pullRequest.number}`, options.server).toString();
+      const href = new URL(`/${owner}/${name}/pulls/${response.pullRequest.number}`, serverUrl).toString();
       writeLine(context.stdout, `Created pull request #${response.pullRequest.number} ${owner}/${name}`);
       writeLine(context.stdout, `  title: ${response.pullRequest.title}`);
       writeLine(context.stdout, `  base:  ${response.pullRequest.baseRef.replace(/^refs\/heads\//, "")}`);
@@ -665,7 +725,7 @@ export const runCli = async (
   program.exitOverride();
 
   try {
-    await program.parseAsync(argv, { from: "user" });
+    await program.parseAsync(normalizeCliArgs(argv), { from: "user" });
   } catch (error) {
     if (error instanceof Error && error.name === "CommanderError") {
       const exitCode = (error as Error & { exitCode?: number }).exitCode;

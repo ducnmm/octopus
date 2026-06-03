@@ -6,7 +6,7 @@ import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { Transaction } from "@mysten/sui/transactions";
 import { fromHex } from "@mysten/sui/utils";
 import { WalrusClient, blobIdFromInt } from "@mysten/walrus";
-import { envInt } from "@octopus/shared";
+import { envInt } from "@ducnmm/octopus-shared";
 
 type WalrusStorageMode = "local" | "walrus-cli" | "walrus-relay";
 

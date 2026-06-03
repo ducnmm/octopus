@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { octopusCredentialsSchema, type OctopusCredentials } from "@octopus/shared";
+import { octopusCredentialsSchema, type OctopusCredentials } from "@ducnmm/octopus-shared";
 
 export const credentialsPath = (home = homedir()): string => {
   return join(home, ".octopus", "credentials.json");

@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { access, mkdir } from "node:fs/promises";
 import { dirname, normalize, resolve, sep } from "node:path";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { ownerNameSchema, repoNameSchema } from "@octopus/shared";
+import { ownerNameSchema, repoNameSchema } from "@ducnmm/octopus-shared";
 import { parseDelegateAuth, type AuthContext } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import { createPushArtifacts, listRefs } from "./artifacts.js";

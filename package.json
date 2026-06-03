@@ -7,11 +7,11 @@
   "packageManager": "pnpm@9.12.3",
   "scripts": {
     "build": "pnpm -r build",
-    "check": "pnpm --filter @octopus/shared build && pnpm -r check",
-    "dev:server": "pnpm --filter @octopus/shared build && pnpm --filter @octopus/server dev",
+    "check": "pnpm --filter @ducnmm/octopus-shared build && pnpm -r check",
+    "dev:server": "pnpm --filter @ducnmm/octopus-shared build && pnpm --filter @octopus/server dev",
     "dev:web": "pnpm --filter @octopus/web dev",
-    "octopus": "pnpm --filter @octopus/shared build && pnpm --filter @octopus/cli start",
-    "test": "pnpm --filter @octopus/shared build && pnpm -r test"
+    "octopus": "pnpm --filter @ducnmm/octopus-shared build && pnpm --filter @ducnmm/octopus start",
+    "test": "pnpm --filter @ducnmm/octopus-shared build && pnpm -r test"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

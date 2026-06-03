@@ -12,7 +12,7 @@ import {
   registerDelegateRequestSchema,
   type DelegateAuthTokenPayload,
   type RegisterDelegateRequest
-} from "@octopus/shared";
+} from "@ducnmm/octopus-shared";
 import type { ServerConfig } from "./config.js";
 
 export type DelegateIdentity = {

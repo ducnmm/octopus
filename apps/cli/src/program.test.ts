@@ -9,6 +9,9 @@ import type { OctopusFetch } from "./client.js";
 import { readCredentials, writeCredentials } from "./credentials.js";
 import { generateDelegateIdentity } from "./delegate.js";
 
+const hostedServerUrl = "https://octopus-server.up.railway.app";
+const localServerUrl = "http://127.0.0.1:48787";
+
 const execFileAsync = promisify(execFile);
 
 type CapturedOutput = {
@@ -96,12 +99,30 @@ test("repo create lets the server choose the owner namespace by default", async 
 
   expect(fetchImpl).toHaveBeenCalledOnce();
   const [url, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
-  expect(String(url)).toBe("http://127.0.0.1:48787/v1/repos");
+  expect(String(url)).toBe(`${hostedServerUrl}/v1/repos`);
   expect(JSON.parse(String(init?.body))).toEqual({
     name: "demo",
     visibility: "public"
   });
   expect(stdout.output()).toContain("Created 0xabc/demo (public)");
+});
+
+test("repo create --dev uses the local server", async () => {
+  const fetchImpl = vi.fn(async () =>
+    okJson({
+      owner: "0xabc",
+      name: "demo",
+      visibility: "public",
+      gitRemotePath: "/0xabc/demo.git"
+    }, 201)
+  ) as unknown as OctopusFetch;
+  const { context, stdout } = createContext(fetchImpl);
+
+  await runCli(["repo", "create", "demo", "--dev"], context);
+
+  const [url] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
+  expect(String(url)).toBe(`${localServerUrl}/v1/repos`);
+  expect(stdout.output()).toContain(`Remote: ${localServerUrl}/0xabc/demo.git`);
 });
 
 test("repo create supports an explicit owner namespace", async () => {
@@ -206,10 +227,32 @@ test("repo restore calls the restore endpoint and prints the result", async () =
   await runCli(["repo", "restore", "ducnmm/demo"], context);
 
   const [url, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
-  expect(String(url)).toBe("http://127.0.0.1:48787/v1/repos/ducnmm/demo/restore");
+  expect(String(url)).toBe(`${hostedServerUrl}/v1/repos/ducnmm/demo/restore`);
   expect(init?.method).toBe("POST");
   expect(stdout.output()).toContain("Restored ducnmm/demo");
   expect(stdout.output()).toContain("source:   sui-local");
+});
+
+test("repo restore accepts the legacy -dev alias for local server", async () => {
+  const fetchImpl = vi.fn(async () =>
+    okJson({
+      owner: "ducnmm",
+      repo: "demo",
+      repoPath: "/tmp/repos/ducnmm/demo.git",
+      manifestId: "00000001-heads-main",
+      refName: "refs/heads/main",
+      restoredCommit: "abc123",
+      artifactDigest: "digest",
+      storageMode: "local",
+      manifestSource: "sui-local"
+    })
+  ) as unknown as OctopusFetch;
+  const { context } = createContext(fetchImpl);
+
+  await runCli(["repo", "restore", "ducnmm/demo", "-dev"], context);
+
+  const [url] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
+  expect(String(url)).toBe(`${localServerUrl}/v1/repos/ducnmm/demo/restore`);
 });
 
 test("pr create opens a pull request", async () => {
@@ -241,7 +284,7 @@ test("pr create opens a pull request", async () => {
   ], context);
 
   const [url, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
-  expect(String(url)).toBe("http://127.0.0.1:48787/v1/repos/ducnmm/demo/pulls");
+  expect(String(url)).toBe(`${hostedServerUrl}/v1/repos/ducnmm/demo/pulls`);
   expect(init?.method).toBe("POST");
   expect(JSON.parse(String(init?.body))).toEqual({
     title: "Add feature",
@@ -302,6 +345,51 @@ test("auth login accepts the wallet callback and writes credentials", async () =
   });
   expect(credentials?.delegatePrivateKey).toBeTruthy();
   expect(stdout.output()).toContain(`Credentials: ${home}/.octopus/credentials.json`);
+  await rm(home, { recursive: true, force: true });
+});
+
+test("auth login --dev opens the local web login against the local server", async () => {
+  const home = await mkdtemp(join(tmpdir(), "octopus-cli-home-"));
+  const { context, stdout } = createContext();
+  context.home = home;
+
+  const run = runCli([
+    "auth",
+    "login",
+    "--dev",
+    "--no-browser",
+    "--timeout-ms",
+    "5000"
+  ], context);
+
+  const [, callbackUrl] = await waitForMatch(
+    stdout.output,
+    /Waiting for wallet approval at (http:\/\/127\.0\.0\.1:\d+\/callback)/
+  );
+  const [, openUrl] = await waitForMatch(stdout.output, /Open: (http:\/\/127\.0\.0\.1:45173\/login\?\S+)/);
+  const loginUrl = new URL(openUrl!);
+  const state = loginUrl.searchParams.get("state");
+  expect(loginUrl.searchParams.get("server")).toBe(localServerUrl);
+  expect(state).toMatch(/^[0-9a-f]{32}$/);
+
+  await fetch(callbackUrl!, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      walletAddress: "0xabc",
+      accountId: "local:abc",
+      state
+    })
+  });
+  await run;
+
+  const credentials = await readCredentials(home);
+  expect(credentials).toMatchObject({
+    walletAddress: "0xabc",
+    accountId: "local:abc",
+    serverUrl: localServerUrl,
+    webUrl: "http://127.0.0.1:45173"
+  });
   await rm(home, { recursive: true, force: true });
 });
 

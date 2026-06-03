@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { delegateAuthHeaders, delegateAuthTokenMessage, type DelegateAuthToken } from "@octopus/shared";
+import { delegateAuthHeaders, delegateAuthTokenMessage, type DelegateAuthToken } from "@ducnmm/octopus-shared";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { buildServer } from "../src/server.js";
