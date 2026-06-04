@@ -16,7 +16,7 @@ COPY tsconfig.base.json ./
 COPY packages/shared ./packages/shared
 COPY apps/server ./apps/server
 
-RUN pnpm --filter @octopus/shared build \
+RUN pnpm --filter @ducnmm/octopus-shared build \
     && pnpm --filter @octopus/server build \
     && pnpm --filter @octopus/server deploy --prod /app/runtime
 
