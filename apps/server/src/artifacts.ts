@@ -130,6 +130,10 @@ const refSlug = (refName: string): string => {
   return refName.replace(/^refs\//, "").replace(/[^A-Za-z0-9._-]+/g, "-");
 };
 
+const isDurableRef = (refName: string): boolean => {
+  return refName.startsWith("refs/heads/") || refName.startsWith("refs/tags/");
+};
+
 const changedRefs = (before: GitRefMap, after: GitRefMap): Array<{
   refName: string;
   oldCommit: string | null;
@@ -142,6 +146,10 @@ const changedRefs = (before: GitRefMap, after: GitRefMap): Array<{
   }> = [];
 
   for (const [refName, newCommit] of after.entries()) {
+    if (!isDurableRef(refName)) {
+      continue;
+    }
+
     const oldCommit = before.get(refName) ?? null;
     if (oldCommit !== newCommit) {
       changed.push({ refName, oldCommit, newCommit });

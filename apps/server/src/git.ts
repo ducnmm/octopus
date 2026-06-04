@@ -7,7 +7,14 @@ import { parseDelegateAuth, type AuthContext } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import { createPushArtifacts, listRefs, type GitRefMap } from "./artifacts.js";
 import { indexRepository } from "./indexer.js";
-import { anchorPushManifests, canReadRepo, canWriteRepo, readSuiRepoState, readSuiRepoStateForAuthorization } from "./sui.js";
+import {
+  anchorPushManifests,
+  canReadRepo,
+  canWriteRepo,
+  readSuiRepoState,
+  readSuiRepoStateForAuthorization,
+  type SuiRepoState
+} from "./sui.js";
 import { recordPushAttempt } from "./push-attempts.js";
 
 type GitResult = {
@@ -179,6 +186,14 @@ const restoreRefs = async (repoPath: string, beforeRefs: GitRefMap, afterRefs: G
   }
 };
 
+const refsFromRepoState = (repoState: SuiRepoState | null | undefined): GitRefMap => {
+  const refs: GitRefMap = new Map();
+  for (const ref of Object.values(repoState?.refs ?? {})) {
+    refs.set(ref.refName, ref.commitDigest);
+  }
+  return refs;
+};
+
 export const handleGitHttp = async (
   request: FastifyRequest,
   reply: FastifyReply,
@@ -252,7 +267,7 @@ export const handleGitHttp = async (
     }
   }
 
-  const beforeRefs = isReceivePack ? await listRefs(repoPath) : null;
+  const cacheBeforeRefs = isReceivePack ? await listRefs(repoPath) : null;
   const body = await readRequestBody(request);
   const env = {
     ...process.env,
@@ -290,8 +305,9 @@ export const handleGitHttp = async (
     reply.header(name, value);
   }
 
-  if (isReceivePack && statusCode >= 200 && statusCode < 300 && beforeRefs) {
+  if (isReceivePack && statusCode >= 200 && statusCode < 300 && cacheBeforeRefs) {
     const afterRefs = await listRefs(repoPath);
+    const authoritativeBeforeRefs = refsFromRepoState(repoState);
     try {
       const manifests = await createPushArtifacts({
         dataDir: config.dataDir,
@@ -299,7 +315,7 @@ export const handleGitHttp = async (
         owner: repoRef.owner,
         repo: repoRef.repo,
         actorWalletAddress: auth?.walletAddress,
-        beforeRefs,
+        beforeRefs: authoritativeBeforeRefs,
         afterRefs,
         visibility: repoState?.visibility ?? "public",
         repoObjectId: repoState?.repoObjectId,
@@ -339,7 +355,7 @@ export const handleGitHttp = async (
     } catch (error) {
       let rollbackError: unknown;
       try {
-        await restoreRefs(repoPath, beforeRefs, afterRefs);
+        await restoreRefs(repoPath, authoritativeBeforeRefs, afterRefs);
       } catch (nextError) {
         rollbackError = nextError;
       }

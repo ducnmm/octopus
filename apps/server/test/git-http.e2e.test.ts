@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { delegateAuthHeaders, delegateAuthTokenMessage, type DelegateAuthToken } from "@ducnmm/octopus-shared";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
@@ -62,6 +63,23 @@ const signedDelegateHeaders = async (scope: "rest" | "git"): Promise<Record<stri
 };
 
 const delegateHeaders = (): Record<string, string> => restAuthHeaders;
+
+const removeWorkspace = async (path: string): Promise<void> => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await rm(path, { force: true, recursive: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOTEMPTY" && code !== "EBUSY") {
+        throw error;
+      }
+      await sleep(25 * (attempt + 1));
+    }
+  }
+
+  await rm(path, { force: true, recursive: true });
+};
 
 const registerDelegate = async (walletAddress = delegate.address): Promise<void> => {
   const registerResponse = await fetch(new URL("/v1/auth/delegate", baseUrl), {
@@ -142,7 +160,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await server.close();
-  await rm(workspace, { force: true, recursive: true });
+  await removeWorkspace(workspace);
 });
 
 test("serves normal git push and clone through smart HTTP", async () => {
@@ -479,6 +497,71 @@ test("rolls back refs when durable artifact creation fails after receive-pack", 
       process.env.WALRUS_BIN = previousWalrusBin;
     }
   }
+});
+
+test("anchors durable refs from authoritative Sui state when the bare cache is ahead", async () => {
+  const owner = delegate.address;
+  const remoteUrl = `${baseUrl}/${owner}/reconcile-demo.git`;
+  const barePath = join(dataDir, "repos", owner, "reconcile-demo.git");
+
+  await registerDelegate();
+  const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...delegateHeaders()
+    },
+    body: JSON.stringify({
+      name: "reconcile-demo",
+      visibility: "public"
+    })
+  });
+  expect(createResponse.status).toBe(201);
+
+  const sourceRepo = join(workspace, "reconcile-source");
+  await git(["init", sourceRepo]);
+  await git(["config", "user.email", "test@octopus.local"], sourceRepo);
+  await git(["config", "user.name", "Octopus Test"], sourceRepo);
+  await writeFile(join(sourceRepo, "README.md"), "reconcile test\n");
+  await git(["add", "README.md"], sourceRepo);
+  await git(["commit", "-m", "initial commit"], sourceRepo);
+  await git(["branch", "-M", "main"], sourceRepo);
+  const mainCommit = await git(["rev-parse", "main"], sourceRepo);
+
+  await git(["--git-dir", barePath, "fetch", sourceRepo, "main:refs/heads/main"]);
+  await expect(
+    git(["--git-dir", barePath, "for-each-ref", "--format=%(refname) %(objectname)"])
+  ).resolves.toBe(`refs/heads/main ${mainCommit}`);
+
+  const emptyManifestResponse = await fetch(new URL(`/v1/repos/${owner}/reconcile-demo/manifests`, baseUrl));
+  expect(emptyManifestResponse.status).toBe(200);
+  await expect(emptyManifestResponse.json()).resolves.toEqual({ manifests: [] });
+
+  await git(["remote", "add", "origin", remoteUrl], sourceRepo);
+  await git([
+    "config",
+    "--local",
+    "--add",
+    `http.${remoteUrl}.extraHeader`,
+    `${delegateAuthHeaders.token}: ${gitAuthHeaders[delegateAuthHeaders.token]}`
+  ], sourceRepo);
+  await git(["push", "origin", "main:refs/octopus/repair/main"], sourceRepo);
+
+  const manifestResponse = await fetch(new URL(`/v1/repos/${owner}/reconcile-demo/manifests`, baseUrl));
+  expect(manifestResponse.status).toBe(200);
+  const manifestBody = (await manifestResponse.json()) as {
+    manifests: Array<{ refName: string; oldCommit: string | null; newCommit: string }>;
+  };
+  expect(manifestBody.manifests).toHaveLength(1);
+  expect(manifestBody.manifests[0]).toEqual(expect.objectContaining({
+    refName: "refs/heads/main",
+    oldCommit: null,
+    newCommit: mainCommit
+  }));
+
+  const state = await readSuiRepoState(config, owner, "reconcile-demo");
+  expect(state?.refs["refs/heads/main"]?.commitDigest).toBe(mainCommit);
+  expect(state?.refs["refs/octopus/repair/main"]).toBeUndefined();
 });
 
 test("opens pull requests from pushed branches", async () => {
