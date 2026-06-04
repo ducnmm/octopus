@@ -71,6 +71,7 @@ import {
 
 const underwaterBackgroundAsset = new URL("../assets/octopus-underwater-bg.png", import.meta.url);
 const underwaterBackgroundDarkAsset = new URL("../assets/octopus-underwater-bg-dark.png", import.meta.url);
+const serverBuildMarker = "git-reconcile-v3";
 const staticAssetRoutes = [
   {
     path: "/favicon.ico",
@@ -449,7 +450,11 @@ export const buildServer = (config: ServerConfig) => {
 
   app.get("/healthz", async () => ({
     ok: true,
-    service: "octopus-server"
+    service: "octopus-server",
+    build: serverBuildMarker,
+    gitCommit: process.env.OCTOPUS_BUILD_SHA ?? process.env.RAILWAY_GIT_COMMIT_SHA,
+    railwayDeploymentId: process.env.RAILWAY_DEPLOYMENT_ID,
+    railwayServiceName: process.env.RAILWAY_SERVICE_NAME
   }));
 
   app.get("/assets/octopus-underwater-bg.png", async (_request, reply) => {

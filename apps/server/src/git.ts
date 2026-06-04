@@ -194,6 +194,16 @@ const refsFromRepoState = (repoState: SuiRepoState | null | undefined): GitRefMa
   return refs;
 };
 
+const repairRefPrefix = "refs/octopus/repair/";
+
+const pruneRepairRefs = async (repoPath: string, refs: GitRefMap): Promise<void> => {
+  for (const [refName, commit] of refs.entries()) {
+    if (refName.startsWith(repairRefPrefix)) {
+      await runGit(["--git-dir", repoPath, "update-ref", "-d", refName, commit]);
+    }
+  }
+};
+
 export const handleGitHttp = async (
   request: FastifyRequest,
   reply: FastifyReply,
@@ -352,6 +362,8 @@ export const handleGitHttp = async (
           indexRepository(config, indexedState).catch(() => undefined);
         }
       }
+
+      await pruneRepairRefs(repoPath, afterRefs).catch(() => undefined);
     } catch (error) {
       let rollbackError: unknown;
       try {

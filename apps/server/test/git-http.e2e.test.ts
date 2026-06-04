@@ -562,6 +562,9 @@ test("anchors durable refs from authoritative Sui state when the bare cache is a
   const state = await readSuiRepoState(config, owner, "reconcile-demo");
   expect(state?.refs["refs/heads/main"]?.commitDigest).toBe(mainCommit);
   expect(state?.refs["refs/octopus/repair/main"]).toBeUndefined();
+  await expect(
+    git(["--git-dir", barePath, "for-each-ref", "--format=%(refname)", "refs/octopus/repair"])
+  ).resolves.toBe("");
 });
 
 test("opens pull requests from pushed branches", async () => {
