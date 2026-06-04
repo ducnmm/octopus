@@ -411,6 +411,76 @@ test("serves normal git push and clone through smart HTTP", async () => {
   expect(restoredClonedCommit).toBe(pushedCommit);
 });
 
+test("rolls back refs when durable artifact creation fails after receive-pack", async () => {
+  const previousWalrusMode = process.env.OCTOPUS_WALRUS_MODE;
+  const previousWalrusBin = process.env.WALRUS_BIN;
+  process.env.OCTOPUS_WALRUS_MODE = "cli";
+  process.env.WALRUS_BIN = join(workspace, "missing-walrus");
+
+  try {
+    const owner = delegate.address;
+    const remoteUrl = `${baseUrl}/${owner}/rollback-demo.git`;
+    const barePath = join(dataDir, "repos", owner, "rollback-demo.git");
+
+    await registerDelegate();
+    const createResponse = await fetch(new URL("/v1/repos", baseUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...delegateHeaders()
+      },
+      body: JSON.stringify({
+        name: "rollback-demo",
+        visibility: "public"
+      })
+    });
+    expect(createResponse.status).toBe(201);
+
+    const sourceRepo = join(workspace, "rollback-source");
+    await git(["init", sourceRepo]);
+    await git(["config", "user.email", "test@octopus.local"], sourceRepo);
+    await git(["config", "user.name", "Octopus Test"], sourceRepo);
+    await writeFile(join(sourceRepo, "README.md"), "rollback test\n");
+    await git(["add", "README.md"], sourceRepo);
+    await git(["commit", "-m", "initial commit"], sourceRepo);
+    await git(["branch", "-M", "main"], sourceRepo);
+    await git(["remote", "add", "origin", remoteUrl], sourceRepo);
+    await git([
+      "config",
+      "--local",
+      "--add",
+      `http.${remoteUrl}.extraHeader`,
+      `${delegateAuthHeaders.token}: ${gitAuthHeaders[delegateAuthHeaders.token]}`
+    ], sourceRepo);
+
+    await expect(git(["push", "origin", "main"], sourceRepo)).rejects.toThrow();
+
+    await expect(
+      git(["--git-dir", barePath, "for-each-ref", "--format=%(refname) %(objectname)"])
+    ).resolves.toBe("");
+
+    const manifestResponse = await fetch(new URL(`/v1/repos/${owner}/rollback-demo/manifests`, baseUrl));
+    expect(manifestResponse.status).toBe(200);
+    await expect(manifestResponse.json()).resolves.toEqual({ manifests: [] });
+
+    const attempts = await readFile(join(dataDir, "push_attempts.jsonl"), "utf8");
+    expect(attempts).toContain("\"status\":\"failed\"");
+    expect(attempts).toContain("Failed to run walrus binary");
+  } finally {
+    if (previousWalrusMode === undefined) {
+      delete process.env.OCTOPUS_WALRUS_MODE;
+    } else {
+      process.env.OCTOPUS_WALRUS_MODE = previousWalrusMode;
+    }
+
+    if (previousWalrusBin === undefined) {
+      delete process.env.WALRUS_BIN;
+    } else {
+      process.env.WALRUS_BIN = previousWalrusBin;
+    }
+  }
+});
+
 test("opens pull requests from pushed branches", async () => {
   const owner = delegate.address;
   const remoteUrl = `${baseUrl}/${owner}/pr-demo.git`;

@@ -414,12 +414,21 @@ export const buildServer = (config: ServerConfig) => {
     }
   });
 
-  app.setErrorHandler(async (error, _request, reply) => {
+  app.setErrorHandler(async (error, request, reply) => {
     const nextError = error instanceof Error ? error : new Error(String(error));
     const statusCode = typeof (nextError as Error & { statusCode?: unknown }).statusCode === "number"
       ? (nextError as Error & { statusCode: number }).statusCode
       : 500;
     const message = redactDelegateSecrets(nextError.message);
+    if (statusCode >= 500) {
+      request.log.error({
+        statusCode,
+        method: request.method,
+        url: request.url,
+        error: message,
+        stack: nextError.stack ? redactDelegateSecrets(nextError.stack) : undefined
+      }, "request failed");
+    }
     await reply.code(statusCode).send({ error: message });
   });
 

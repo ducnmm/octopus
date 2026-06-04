@@ -5,7 +5,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { ownerNameSchema, repoNameSchema } from "@ducnmm/octopus-shared";
 import { parseDelegateAuth, type AuthContext } from "./auth.js";
 import type { ServerConfig } from "./config.js";
-import { createPushArtifacts, listRefs } from "./artifacts.js";
+import { createPushArtifacts, listRefs, type GitRefMap } from "./artifacts.js";
 import { indexRepository } from "./indexer.js";
 import { anchorPushManifests, canReadRepo, canWriteRepo, readSuiRepoState, readSuiRepoStateForAuthorization } from "./sui.js";
 import { recordPushAttempt } from "./push-attempts.js";
@@ -163,6 +163,20 @@ const parseRepoFromPath = (pathName: string): { owner: string; repo: string } | 
     owner: decodeURIComponent(match[1] ?? ""),
     repo: decodeURIComponent(match[2] ?? "")
   };
+};
+
+const restoreRefs = async (repoPath: string, beforeRefs: GitRefMap, afterRefs: GitRefMap): Promise<void> => {
+  for (const [refName, newCommit] of afterRefs.entries()) {
+    if (!beforeRefs.has(refName)) {
+      await runGit(["--git-dir", repoPath, "update-ref", "-d", refName, newCommit]);
+    }
+  }
+
+  for (const [refName, oldCommit] of beforeRefs.entries()) {
+    if (afterRefs.get(refName) !== oldCommit) {
+      await runGit(["--git-dir", repoPath, "update-ref", refName, oldCommit]);
+    }
+  }
 };
 
 export const handleGitHttp = async (
@@ -323,11 +337,23 @@ export const handleGitHttp = async (
         }
       }
     } catch (error) {
+      let rollbackError: unknown;
+      try {
+        await restoreRefs(repoPath, beforeRefs, afterRefs);
+      } catch (nextError) {
+        rollbackError = nextError;
+      }
+
       await recordPushAttempt(config, {
         owner: repoRef.owner,
         repo: repoRef.repo,
         status: "failed",
-        error: error instanceof Error ? error.message : String(error),
+        error: [
+          error instanceof Error ? error.message : String(error),
+          rollbackError
+            ? `Ref rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`
+            : undefined
+        ].filter(Boolean).join("\n"),
         actor: auth?.walletAddress,
         createdAtMs: Date.now()
       });
