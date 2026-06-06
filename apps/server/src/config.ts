@@ -98,6 +98,8 @@ export type ServerConfig = {
   sealThreshold?: number;
   webSessionSecret: string;
   delegateCacheTtlMs: number;
+  enokiPrivateApiKey?: string;
+  enokiApiUrl?: string;
 };
 
 export const loadConfig = (): ServerConfig => {
@@ -132,6 +134,12 @@ export const loadConfig = (): ServerConfig => {
     sealKeyServers: sealKeyServers(),
     sealThreshold: process.env.SEAL_THRESHOLD ? envInt(process.env.SEAL_THRESHOLD, 1) : undefined,
     webSessionSecret: process.env.OCTOPUS_WEB_SESSION_SECRET || defaultWebSessionSecret(dataDir),
-    delegateCacheTtlMs: envInt(process.env.OCTOPUS_DELEGATE_CACHE_TTL_MS, 60_000)
+    delegateCacheTtlMs: envInt(process.env.OCTOPUS_DELEGATE_CACHE_TTL_MS, 60_000),
+    enokiPrivateApiKey:
+      process.env.ENOKI_PRIVATE_API_KEY ||
+      process.env.OCTOPUS_ENOKI_PRIVATE_API_KEY ||
+      process.env.ENOKI_API_KEY ||
+      undefined,
+    enokiApiUrl: process.env.ENOKI_API_URL || process.env.OCTOPUS_ENOKI_API_URL || undefined
   };
 };

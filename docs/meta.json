@@ -1,0 +1,14 @@
+{
+  "title": "Octopus Documentation",
+  "icon": "BookOpen",
+  "pages": [
+    "index",
+    "quickstart",
+    "architecture",
+    "cli",
+    "api",
+    "testing",
+    "runbooks",
+    "reference"
+  ]
+}

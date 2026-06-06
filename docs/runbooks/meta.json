@@ -1,0 +1,5 @@
+{
+  "title": "Runbooks",
+  "icon": "Terminal",
+  "pages": ["local-dev", "deployment"]
+}

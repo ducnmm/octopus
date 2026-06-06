@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DAppKitProvider, useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
+import {
+  DAppKitProvider,
+  useCurrentAccount,
+  useDAppKit,
+  useWallets,
+  type UiWallet
+} from "@mysten/dapp-kit-react";
 import { ConnectButton } from "@mysten/dapp-kit-react/ui";
+import { getWalletMetadata, isEnokiWallet, type AuthProvider } from "@mysten/enoki";
 import { Transaction } from "@mysten/sui/transactions";
+import { toBase64 } from "@mysten/sui/utils";
 import { dAppKit } from "./dapp-kit.js";
+import { enokiProviderLabels, enokiProviderOrder } from "./enoki.js";
 import { runtimeConfig, suiClient } from "./config.js";
 import {
   authPanelMode,
@@ -13,6 +22,30 @@ import {
 import "./styles.css";
 
 type LoginState = "idle" | "working" | "success" | "error";
+
+type TransactionPolicy = {
+  allowedAddresses?: Array<string | null | undefined>;
+  allowedMoveCallTargets?: string[];
+};
+
+type TransactionResult = {
+  digest?: string;
+};
+
+type SponsoredTransaction = {
+  digest: string;
+  bytes: string;
+};
+
+class HttpStatusError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "HttpStatusError";
+    this.status = status;
+  }
+}
 
 const queryParams = (): LoginParams => {
   return loginParamsFromSearch(window.location.search, runtimeConfig);
@@ -181,6 +214,107 @@ const waitForDigest = async (digest: unknown): Promise<void> => {
   await suiClient.waitForTransaction({ digest });
 };
 
+const uniqueValues = (values: Array<string | null | undefined>): string[] => {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+};
+
+const jsonResponse = async <T,>(response: Response, fallback: string): Promise<T> => {
+  const body = await response.json().catch(() => ({})) as { error?: string };
+  if (!response.ok) {
+    throw new HttpStatusError(body.error ?? `${fallback}: HTTP ${response.status}`, response.status);
+  }
+
+  return body as T;
+};
+
+const canFallbackFromSponsor = (error: unknown): boolean => {
+  return error instanceof HttpStatusError && [404, 409, 501, 503].includes(error.status);
+};
+
+const shouldTrySponsoredTransaction = (params: LoginParams): boolean => {
+  return runtimeConfig.enoki.sponsorTransactions && Boolean(params.server) && runtimeConfig.suiNetwork !== "localnet";
+};
+
+const executeSponsoredTransaction = async (
+  kit: unknown,
+  params: LoginParams,
+  tx: Transaction,
+  policy: TransactionPolicy,
+  setMessage: (message: string) => void
+): Promise<TransactionResult> => {
+  setMessage("Requesting Enoki gas sponsorship...");
+  const transactionKindBytes = toBase64(await tx.build({
+    client: suiClient,
+    onlyTransactionKind: true
+  }));
+  const sponsorResponse = await fetch(serverUrl(params, "/v1/enoki/sponsored-transactions"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      sender: tx.getData().sender,
+      transactionKindBytes,
+      allowedAddresses: uniqueValues(policy.allowedAddresses ?? []),
+      allowedMoveCallTargets: uniqueValues(policy.allowedMoveCallTargets ?? [])
+    })
+  });
+  const sponsored = await jsonResponse<SponsoredTransaction>(sponsorResponse, "Enoki sponsorship failed");
+
+  setMessage("Sign the sponsored transaction in your wallet.");
+  const signed = await (kit as unknown as {
+    signTransaction: (input: { transaction: string }) => Promise<{ signature: string }>;
+  }).signTransaction({ transaction: sponsored.bytes });
+  if (!signed.signature) {
+    throw new Error("Wallet did not return a transaction signature");
+  }
+
+  setMessage("Executing sponsored transaction...");
+  const executeResponse = await fetch(
+    serverUrl(params, `/v1/enoki/sponsored-transactions/${encodeURIComponent(sponsored.digest)}/execute`),
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signature: signed.signature })
+    }
+  );
+  const executed = await jsonResponse<TransactionResult>(executeResponse, "Sponsored transaction execution failed");
+  const digest = executed.digest ?? sponsored.digest;
+  setMessage("Waiting for Sui confirmation...");
+  await waitForDigest(digest);
+
+  return { digest };
+};
+
+const executeWalletTransaction = async (
+  kit: unknown,
+  params: LoginParams,
+  accountAddress: string,
+  tx: Transaction,
+  policy: TransactionPolicy,
+  setMessage: (message: string) => void
+): Promise<TransactionResult> => {
+  tx.setSender(accountAddress);
+
+  if (shouldTrySponsoredTransaction(params)) {
+    try {
+      return await executeSponsoredTransaction(kit, params, tx, policy, setMessage);
+    } catch (error) {
+      if (!canFallbackFromSponsor(error)) {
+        throw error;
+      }
+      setMessage("Approve the transaction in your wallet.");
+    }
+  }
+
+  const result = await (kit as unknown as {
+    signAndExecuteTransaction: (input: { transaction: Transaction }) => Promise<TransactionResult | null>;
+  }).signAndExecuteTransaction({ transaction: tx });
+  if (!result) {
+    throw new Error("Wallet did not return a transaction result");
+  }
+
+  return result;
+};
+
 function MetricValue({ fallback, value }: { fallback: string; value?: string | null }) {
   const fullValue = value?.trim() ?? "";
 
@@ -200,6 +334,47 @@ function DetailRow({ label, value, fallback }: { label: string; value?: string |
   );
 }
 
+function EnokiConnectButtons() {
+  const account = useCurrentAccount();
+  const kit = useDAppKit();
+  const wallets = useWallets();
+  const [connectingProvider, setConnectingProvider] = useState<AuthProvider | null>(null);
+  const enokiWallets = useMemo(() => {
+    return wallets
+      .filter(isEnokiWallet)
+      .map((wallet) => ({ wallet, provider: getWalletMetadata(wallet)?.provider }))
+      .filter((entry): entry is { wallet: UiWallet; provider: AuthProvider } => Boolean(entry.provider))
+      .sort((left, right) => enokiProviderOrder.indexOf(left.provider) - enokiProviderOrder.indexOf(right.provider));
+  }, [wallets]);
+
+  if (account || enokiWallets.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="enoki-actions">
+      {enokiWallets.map(({ wallet, provider }) => (
+        <button
+          className="enoki-button"
+          disabled={connectingProvider !== null}
+          key={provider}
+          onClick={() => {
+            setConnectingProvider(provider);
+            void (kit as unknown as {
+              connectWallet: (input: { wallet: UiWallet }) => Promise<unknown>;
+            }).connectWallet({ wallet }).catch((error) => {
+              console.error(error);
+            }).finally(() => setConnectingProvider(null));
+          }}
+          type="button"
+        >
+          {connectingProvider === provider ? "Connecting" : `Continue with ${enokiProviderLabels[provider]}`}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function LoginPanel() {
   const account = useCurrentAccount();
   const kit = useDAppKit();
@@ -207,23 +382,16 @@ function LoginPanel() {
   const [state, setState] = useState<LoginState>("idle");
   const [message, setMessage] = useState("");
 
-  const execute = useCallback(async (tx: Transaction): Promise<void> => {
-    tx.setSender(account!.address);
-    const result = await (kit as unknown as {
-      signAndExecuteTransaction: (input: { transaction: Transaction }) => Promise<unknown>;
-    }).signAndExecuteTransaction({ transaction: tx });
-    if (!result) {
-      throw new Error("Wallet did not return a transaction result");
-    }
-  }, [account, kit]);
-
   const createAccount = useCallback(async (): Promise<string> => {
     const tx = new Transaction();
     tx.moveCall({
       target: `${params.packageId}::account::create_account`,
       arguments: [tx.object(params.accountRegistryId)]
     });
-    await execute(tx);
+    await executeWalletTransaction(kit, params, account!.address, tx, {
+      allowedAddresses: [account!.address, params.accountRegistryId],
+      allowedMoveCallTargets: [`${params.packageId}::account::create_account`]
+    }, setMessage);
 
     for (let attempt = 0; attempt < 8; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
@@ -234,7 +402,7 @@ function LoginPanel() {
     }
 
     throw new Error("Created account, but could not resolve account object ID yet");
-  }, [account, execute, params.accountRegistryId, params.packageId]);
+  }, [account, kit, params]);
 
   const addDelegateKey = useCallback(async (
     accountId: string,
@@ -253,8 +421,11 @@ function LoginPanel() {
         tx.pure.string(label)
       ]
     });
-    await execute(tx);
-  }, [execute, params.accountRegistryId, params.packageId]);
+    await executeWalletTransaction(kit, params, account!.address, tx, {
+      allowedAddresses: [account!.address, accountId, params.accountRegistryId, delegateAddress],
+      allowedMoveCallTargets: [`${params.packageId}::account::add_delegate_key`]
+    }, setMessage);
+  }, [account, kit, params]);
 
   const addDelegateKeyIfNeeded = useCallback(async (
     accountId: string,
@@ -355,6 +526,7 @@ function LoginPanel() {
           <DetailRow label="Relay" fallback="Local" value={params.serverDelegateAddress} />
         </div>
         <div className="actions">
+          <EnokiConnectButtons />
           <ConnectButton>Connect Wallet</ConnectButton>
           <button className="authorize-button" disabled={!account?.address || state === "working"} onClick={() => void approve()} type="button">
             {state === "working" ? "Authorizing" : "Authorize"}
@@ -374,6 +546,28 @@ function WebLoginPanel() {
   const [state, setState] = useState<LoginState>("idle");
   const [message, setMessage] = useState("");
 
+  const createAccount = useCallback(async (): Promise<string> => {
+    const tx = new Transaction();
+    tx.moveCall({
+      target: `${params.packageId}::account::create_account`,
+      arguments: [tx.object(params.accountRegistryId)]
+    });
+    await executeWalletTransaction(kit, params, account!.address, tx, {
+      allowedAddresses: [account!.address, params.accountRegistryId],
+      allowedMoveCallTargets: [`${params.packageId}::account::create_account`]
+    }, setMessage);
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+      const accountId = await resolveAccountId(params.accountRegistryId, account!.address);
+      if (accountId) {
+        return accountId;
+      }
+    }
+
+    throw new Error("Created account, but could not resolve account object ID yet");
+  }, [account, kit, params]);
+
   const signIn = useCallback(async () => {
     if (!account?.address) {
       setMessage("Connect a Sui wallet first.");
@@ -387,9 +581,24 @@ function WebLoginPanel() {
     }
 
     setState("working");
-    setMessage("Preparing wallet signature...");
+    setMessage("Checking Octopus account...");
 
     try {
+      let accountId: string | null = null;
+      if (params.packageId && params.accountRegistryId) {
+        try {
+          accountId = await resolveAccountId(params.accountRegistryId, account.address);
+        } catch {
+          accountId = null;
+        }
+
+        if (!accountId) {
+          setMessage("Creating Octopus account...");
+          accountId = await createAccount();
+        }
+      }
+
+      setMessage("Preparing wallet signature...");
       const challengeUrl = new URL(serverUrl(params, "/v1/auth/web-session/challenge"));
       challengeUrl.searchParams.set("returnTo", params.returnTo || "/");
       const challengeResponse = await fetch(challengeUrl, {
@@ -406,15 +615,6 @@ function WebLoginPanel() {
       }).signPersonalMessage({
         message: new TextEncoder().encode(challenge.message)
       });
-
-      let accountId: string | null = null;
-      if (params.accountRegistryId) {
-        try {
-          accountId = await resolveAccountId(params.accountRegistryId, account.address);
-        } catch {
-          accountId = null;
-        }
-      }
 
       setMessage("Starting web session...");
       const sessionResponse = await fetch(serverUrl(params, "/v1/auth/web-session"), {
@@ -444,7 +644,7 @@ function WebLoginPanel() {
         notifyBrowserHost(params, "octopus-auth-error", { message: text });
       }
     }
-  }, [account, kit, params]);
+  }, [account, createAccount, kit, params]);
 
   useEffect(() => {
     if (!params.autoStart || autoStarted.current || !account?.address || state !== "idle") {
@@ -476,6 +676,7 @@ function WebLoginPanel() {
           <DetailRow label="Return" fallback="/" value={params.returnTo} />
         </div>
         <div className="actions">
+          <EnokiConnectButtons />
           <ConnectButton>Connect Wallet</ConnectButton>
           <button className="authorize-button" disabled={!account?.address || state === "working"} onClick={() => void signIn()} type="button">
             {state === "working" ? "Signing in" : "Sign in"}
@@ -595,6 +796,7 @@ function UnlockRepoPanel() {
           <DetailRow label="Server" fallback="Missing" value={params.server} />
         </div>
         <div className="actions">
+          <EnokiConnectButtons />
           <ConnectButton>Connect Wallet</ConnectButton>
           <button className="authorize-button" disabled={!account?.address || state === "working"} onClick={() => void unlock()} type="button">
             {state === "working" ? "Unlocking" : "Unlock"}
@@ -655,12 +857,10 @@ function RepoAccessPanel() {
       });
 
       setMessage("Approve the contributor change in your wallet.");
-      const result = await (kit as unknown as {
-        signAndExecuteTransaction: (input: { transaction: Transaction }) => Promise<{ digest?: string } | null>;
-      }).signAndExecuteTransaction({ transaction: tx });
-      if (!result) {
-        throw new Error("Wallet did not return a transaction result");
-      }
+      const result = await executeWalletTransaction(kit, params, account.address, tx, {
+        allowedAddresses: [account.address, params.repoObjectId, params.walletAddress],
+        allowedMoveCallTargets: [`${params.packageId}::registry::${functionName}`]
+      }, setMessage);
 
       setMessage("Waiting for Sui confirmation...");
       await waitForDigest(result.digest);
@@ -709,6 +909,7 @@ function RepoAccessPanel() {
           <DetailRow label="Role" fallback="Writer" value={normalizedRole} />
         </div>
         <div className="actions">
+          <EnokiConnectButtons />
           <ConnectButton>Connect Wallet</ConnectButton>
           <button className="authorize-button" disabled={!account?.address || state === "working"} onClick={() => void executeAccessChange()} type="button">
             {state === "working" ? "Updating" : accessLabel}

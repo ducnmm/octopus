@@ -4,6 +4,27 @@ Octopus is a recoverable Git forge: GitHub-like developer UX, Walrus-backed repo
 
 The server is a Git gateway, cache, indexer, and search node. The source of truth is stored in Walrus blobs and Sui registry objects.
 
+## Documentation
+
+Start with [`docs/README.md`](docs/README.md) for the documentation map.
+
+- [`docs/quickstart.md`](docs/quickstart.md): install, run, authenticate, push, clone, and restore.
+- [`docs/architecture.md`](docs/architecture.md): component map, source-of-truth boundaries, and data flows.
+- [`docs/cli.md`](docs/cli.md): `octopus` command reference.
+- [`docs/api.md`](docs/api.md): Git HTTP and JSON API reference.
+- [`docs/reference/env-vars.md`](docs/reference/env-vars.md): runtime configuration reference.
+- [`docs/runbooks/local-dev.md`](docs/runbooks/local-dev.md): local development runbook.
+- [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md): hosted/testnet deployment runbook.
+- [`docs/testing.md`](docs/testing.md): checks, coverage areas, and acceptance map.
+
+Run the docs app locally:
+
+```bash
+pnpm dev:docs
+```
+
+Then open `http://127.0.0.1:3004/`.
+
 ## Spec-Driven Development
 
 This repo is initialized spec-first. Before implementing a feature, define or update:

@@ -410,6 +410,14 @@ const joinOriginPath = (origin: string | undefined, path: string): string => {
 };
 
 const pageStyles = `
+      @font-face {
+        font-display: swap;
+        font-family: Ratch;
+        font-style: normal;
+        font-weight: 100 900;
+        src: url("/assets/ratch.woff2") format("woff2");
+      }
+
       :root {
         color-scheme: light dark;
         --github-header: #24292f;
@@ -1238,6 +1246,299 @@ const pageStyles = `
 
       .repo-list-action {
         flex: 0 0 auto;
+      }
+
+      .landing-page {
+        width: 100%;
+        min-height: 100vh;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #000000;
+        color: #f7f7f4;
+        font-family: Ratch, "Avenir Next", "Segoe UI", Helvetica, Arial, sans-serif;
+        font-synthesis: none;
+        text-rendering: geometricPrecision;
+      }
+
+      .landing-shell {
+        position: relative;
+        isolation: isolate;
+        min-height: 100vh;
+        overflow: hidden;
+        background: #000000;
+      }
+
+      .landing-shell::before {
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        background:
+          radial-gradient(circle at 18% 58%, rgba(255, 255, 255, 0.16) 0 1px, transparent 3px),
+          radial-gradient(circle at 78% 24%, rgba(255, 255, 255, 0.12) 0 1px, transparent 3px),
+          radial-gradient(circle at 95% 52%, rgba(255, 255, 255, 0.2) 0 1px, transparent 4px),
+          linear-gradient(180deg, rgba(0, 0, 0, 0.12), #000000 44%, rgba(0, 0, 0, 0));
+        content: "";
+        pointer-events: none;
+      }
+
+      .landing-header {
+        position: relative;
+        z-index: 3;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        width: min(calc(100% - 48px), 1436px);
+        height: 88px;
+        border-bottom: 0;
+        margin: 0 auto;
+        padding: 16px 0;
+        background: transparent;
+      }
+
+      .landing-logo {
+        width: max-content;
+        color: #ffffff;
+        font-size: 40px;
+        font-weight: 800;
+        letter-spacing: 0;
+        line-height: 1;
+        text-decoration: none;
+      }
+
+      .landing-docs span {
+        font-size: 20px;
+        font-weight: 500;
+        line-height: 1;
+      }
+
+      .landing-docs {
+        justify-self: end;
+        display: inline-flex;
+        gap: 10px;
+        align-items: center;
+        min-height: 54px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+        padding: 0 30px;
+        background: rgba(0, 0, 0, 0.3);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+        color: #ffffff;
+        font-size: 18px;
+        font-weight: 430;
+        letter-spacing: 0.04em;
+        text-decoration: none;
+      }
+
+      .landing-hero {
+        position: relative;
+        z-index: 2;
+        display: grid;
+        justify-items: center;
+        width: min(100% - 40px, 1040px);
+        margin: 0 auto;
+        padding-top: clamp(82px, 8.8vh, 104px);
+        text-align: center;
+      }
+
+      .landing-title {
+        display: grid;
+        gap: 0;
+        margin: 0;
+        color: #f8f8f4;
+        font-size: clamp(104px, 10vw, 144px);
+        font-weight: 500;
+        letter-spacing: 0;
+        line-height: 0.8;
+      }
+
+      .landing-title span {
+        display: block;
+      }
+
+      .landing-description {
+        width: min(100%, 980px);
+        margin: 28px 0 0;
+        color: rgba(247, 247, 244, 0.76);
+        font-size: clamp(19px, 1.25vw, 24px);
+        font-weight: 350;
+        letter-spacing: 0;
+        line-height: 1.3;
+      }
+
+      .landing-description strong {
+        color: #ffffff;
+        font-weight: 600;
+      }
+
+      .landing-actions {
+        display: inline-flex;
+        margin-top: 34px;
+      }
+
+      .landing-connect {
+        display: inline-flex;
+        gap: 10px;
+        align-items: center;
+        justify-content: center;
+        min-width: 174px;
+        min-height: 54px;
+        border: 1px solid rgba(255, 255, 255, 0.28);
+        border-radius: 999px;
+        padding: 0 30px;
+        background: rgba(6, 6, 14, 0.48);
+        color: #ffffff;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+        font-size: 18px;
+        font-weight: 430;
+        letter-spacing: 0.04em;
+        text-decoration: none;
+      }
+
+      .landing-connect:hover,
+      .landing-connect:focus-visible {
+        background: rgba(255, 255, 255, 0.08);
+        color: #ffffff;
+      }
+
+      .landing-connect span {
+        font-size: 18px;
+        font-weight: 500;
+        line-height: 1;
+      }
+
+      .landing-aurora {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 0;
+        width: 100%;
+        height: min(56vh, 560px);
+        object-fit: cover;
+        object-position: center top;
+        opacity: 0.96;
+        -webkit-mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.2) 7%, #000000 22%);
+        mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.2) 7%, #000000 22%);
+        pointer-events: none;
+      }
+
+      .landing-mascot {
+        position: absolute;
+        bottom: clamp(-345px, -25vw, -210px);
+        left: 50%;
+        z-index: 1;
+        width: clamp(690px, 54vw, 980px);
+        max-width: none;
+        filter: url("#landing-mascot-defringe");
+        transform: translateX(-50%);
+        transition: transform 360ms ease;
+        pointer-events: auto;
+        user-select: none;
+        will-change: transform;
+      }
+
+      .landing-mascot:hover {
+        transform: translateX(-50%) translateY(-46px) scale(1.045);
+      }
+
+      .landing-filter-defs {
+        position: absolute;
+        width: 0;
+        height: 0;
+        overflow: hidden;
+      }
+
+      @media (min-width: 1280px) {
+        .landing-header {
+          width: calc(100% - 128px);
+        }
+      }
+
+      @media (max-width: 980px) {
+        .landing-header {
+          grid-template-columns: 1fr auto;
+          width: 100%;
+          height: 76px;
+          padding: 12px 18px;
+        }
+
+        .landing-logo {
+          font-size: 36px;
+        }
+
+        .landing-docs {
+          min-height: 46px;
+          padding: 0 20px;
+          font-size: 16px;
+        }
+
+        .landing-hero {
+          width: min(100% - 32px, 760px);
+          padding-top: clamp(76px, 10vh, 108px);
+        }
+
+        .landing-title {
+          font-size: clamp(72px, 12vw, 104px);
+          line-height: 0.84;
+        }
+
+        .landing-description {
+          margin-top: 24px;
+          font-size: 20px;
+        }
+
+        .landing-actions {
+          margin-top: 28px;
+        }
+
+        .landing-connect {
+          min-width: 152px;
+          min-height: 50px;
+          font-size: 17px;
+        }
+
+        .landing-mascot {
+          bottom: clamp(-325px, -38vw, -230px);
+          width: clamp(680px, 92vw, 860px);
+        }
+      }
+
+      @media (max-width: 520px) {
+        .landing-header {
+          height: 70px;
+          padding: 12px 16px;
+        }
+
+        .landing-logo {
+          font-size: 32px;
+        }
+
+        .landing-docs {
+          display: none;
+        }
+
+        .landing-hero {
+          padding-top: 54px;
+        }
+
+        .landing-title {
+          font-size: clamp(48px, 14vw, 72px);
+        }
+
+        .landing-description {
+          font-size: 18px;
+        }
+
+        .landing-aurora {
+          height: 52vh;
+        }
+
+        .landing-mascot {
+          bottom: -230px;
+          width: 670px;
+        }
+
       }
 
       .dashboard-page {
@@ -2170,6 +2471,45 @@ const pageStyles = `
         align-items: center;
       }
 
+      .create-repo-layout {
+        display: grid;
+        width: min(768px, 100%);
+        gap: 16px;
+      }
+
+      .create-repo-panel {
+        display: grid;
+        gap: 18px;
+        padding: 24px;
+      }
+
+      .create-repo-lead {
+        margin: 0;
+        color: var(--fg-muted);
+      }
+
+      .create-repo-form {
+        display: grid;
+        gap: 20px;
+      }
+
+      .create-repo-name-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+        gap: 10px;
+        align-items: end;
+      }
+
+      .create-repo-divider {
+        display: inline-flex;
+        min-height: 32px;
+        align-items: center;
+        justify-content: center;
+        color: var(--fg-muted);
+        font-size: 20px;
+        line-height: 1;
+      }
+
       .pull-request-form {
         display: grid;
         gap: 12px;
@@ -2186,7 +2526,15 @@ const pageStyles = `
         gap: 6px;
       }
 
-      .form-field label {
+      fieldset.form-field {
+        min-width: 0;
+        border: 0;
+        margin: 0;
+        padding: 0;
+      }
+
+      .form-field > label,
+      .form-field-label {
         color: var(--fg-muted);
         font-size: 12px;
         font-weight: 600;
@@ -2195,6 +2543,7 @@ const pageStyles = `
 
       .access-input,
       .access-select,
+      .create-repo-input,
       .pull-request-input,
       .pull-request-select,
       .pull-request-textarea {
@@ -2215,9 +2564,60 @@ const pageStyles = `
       }
 
       .access-input::placeholder,
+      .create-repo-input::placeholder,
       .pull-request-input::placeholder,
       .pull-request-textarea::placeholder {
         color: var(--fg-muted);
+      }
+
+      .create-repo-help {
+        margin: 2px 0 0;
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+
+      .visibility-options {
+        display: grid;
+      }
+
+      .visibility-option {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 10px;
+        align-items: flex-start;
+        border-top: 1px solid var(--border-muted);
+        padding: 12px 0;
+        cursor: pointer;
+      }
+
+      .visibility-option:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+
+      .visibility-option input {
+        margin: 4px 0 0;
+      }
+
+      .visibility-title {
+        display: block;
+        color: var(--fg-default);
+        font-weight: 600;
+      }
+
+      .visibility-copy {
+        display: block;
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+
+      .create-repo-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        border-top: 1px solid var(--border-muted);
+        padding-top: 16px;
       }
 
       .pull-request-title {
@@ -2726,8 +3126,13 @@ const pageStyles = `
 
         .access-form,
         .access-row,
+        .create-repo-name-grid,
         .pull-request-grid {
           grid-template-columns: 1fr;
+        }
+
+        .create-repo-divider {
+          display: none;
         }
 
         .access-form .github-button,
@@ -2756,7 +3161,13 @@ const faviconLinks = `
     <meta name="theme-color" content="#7c3aed" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#010409" media="(prefers-color-scheme: dark)">`;
 
-const topNavigation = (viewer?: WebViewer): string => {
+const topNavigation = (
+  viewer?: WebViewer,
+  options: { loginHref?: string; loginLabel?: string; popup?: boolean } = {}
+): string => {
+  const loginHref = options.loginHref ?? "/login";
+  const loginLabel = options.loginLabel ?? "Sign in";
+  const popupAttr = options.popup ? " data-octopus-auth-popup" : "";
   const auth = viewer
     ? `<div class="site-auth">
         <span class="site-wallet" title="${escapeAttr(viewer.walletAddress)}">${escapeHtml(shortWallet(viewer.walletAddress))}</span>
@@ -2764,7 +3175,7 @@ const topNavigation = (viewer?: WebViewer): string => {
           <button class="site-auth-button" type="submit">Sign out</button>
         </form>
       </div>`
-    : `<div class="site-auth"><a class="site-auth-link" href="/login" data-octopus-auth-popup>Sign in</a></div>`;
+    : `<div class="site-auth"><a class="site-auth-link" href="${escapeAttr(loginHref)}"${popupAttr}>${escapeHtml(loginLabel)}</a></div>`;
 
   return `
     <div class="site-topbar">
@@ -3590,6 +4001,61 @@ const renderPullRequestCreatePanel = (repo: RepoListItem, viewer?: WebViewer): s
 
 const plusIcon = `<svg class="button-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10"></path><path d="M3 8h10"></path></svg>`;
 
+const renderCreateRepoPanel = (viewer?: WebViewer, loginHref = "/login"): string => {
+  if (!viewer) {
+    return `<section class="private-gate" aria-label="Create repository sign in">
+      <h2>Create new repository</h2>
+      <p>Sign in with your Sui wallet before creating a repository.</p>
+      <div class="private-gate-actions">
+        <a class="github-button primary" href="${escapeAttr(loginHref)}" data-octopus-auth-popup>Sign in with Sui wallet</a>
+      </div>
+    </section>`;
+  }
+
+  return `<section class="panel create-repo-panel" aria-label="Create repository form">
+      <h2>Create new repository</h2>
+      <p class="create-repo-lead">Start with an empty Git repository owned by your wallet namespace.</p>
+      <form class="create-repo-form" method="post" action="/v1/repos">
+        <div class="create-repo-name-grid">
+          <div class="form-field">
+            <label for="owner">Owner namespace</label>
+            <input class="create-repo-input" id="owner" name="owner" maxlength="235" autocomplete="off" placeholder="${escapeAttr(shortWallet(viewer.walletAddress))}" pattern="[A-Za-z0-9._-]+">
+            <p class="create-repo-help">Leave blank to use your wallet or primary SuiNS name.</p>
+          </div>
+          <span class="create-repo-divider" aria-hidden="true">/</span>
+          <div class="form-field">
+            <label for="name">Repository name</label>
+            <input class="create-repo-input" id="name" name="name" maxlength="100" autocomplete="off" pattern="[A-Za-z0-9._-]+" required>
+            <p class="create-repo-help">Letters, numbers, dots, underscores, and hyphens.</p>
+          </div>
+        </div>
+        <fieldset class="form-field">
+          <legend class="form-field-label">Visibility</legend>
+          <div class="visibility-options">
+            <label class="visibility-option">
+              <input type="radio" name="visibility" value="public" checked>
+              <span>
+                <span class="visibility-title">Public</span>
+                <span class="visibility-copy">Anyone can find and clone this repository.</span>
+              </span>
+            </label>
+            <label class="visibility-option">
+              <input type="radio" name="visibility" value="private">
+              <span>
+                <span class="visibility-title">Private</span>
+                <span class="visibility-copy">Only the owner and invited contributors can access it.</span>
+              </span>
+            </label>
+          </div>
+        </fieldset>
+        <div class="create-repo-actions">
+          <button class="github-button primary" type="submit">${plusIcon}<span>Create repository</span></button>
+          <a class="github-button" href="/">Cancel</a>
+        </div>
+      </form>
+    </section>`;
+};
+
 const renderNewPullRequestButton = (repo: RepoListItem, viewer?: WebViewer): string => {
   if (!canWritePullRequests(repo, viewer)) {
     return "";
@@ -3842,6 +4308,91 @@ const renderContributionActivity = (repos: RepoListItem[]): string => {
   </section>`;
 };
 
+export const renderLandingPage = (input: { loginHref: string }): string => {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Octopus</title>
+${faviconLinks}
+    <style>
+${pageStyles}
+    </style>
+  </head>
+  <body>
+    <main class="landing-page">
+      <section class="landing-shell" aria-label="Octopus home">
+        <svg class="landing-filter-defs" aria-hidden="true" focusable="false">
+          <filter id="landing-mascot-defringe" color-interpolation-filters="sRGB">
+            <feMorphology in="SourceAlpha" operator="erode" radius="1" result="eroded"></feMorphology>
+            <feComposite in="SourceAlpha" in2="eroded" operator="out" result="edge"></feComposite>
+            <feFlood flood-color="#03060a" flood-opacity="0.42" result="edge-color"></feFlood>
+            <feComposite in="edge-color" in2="edge" operator="in" result="edge-overlay"></feComposite>
+            <feComposite in="edge-overlay" in2="SourceGraphic" operator="over"></feComposite>
+          </filter>
+        </svg>
+        <img class="landing-aurora" src="/assets/aurora-home.avif?v=octopus-home-v1" alt="" aria-hidden="true" fetchpriority="high">
+        <img class="landing-mascot" src="/assets/octopus-walrus-mascot.png?v=octopus-home-v2" alt="" aria-hidden="true" fetchpriority="high">
+        <header class="landing-header">
+          <a class="landing-logo" href="/" aria-label="Octopus home">octopus</a>
+          <a class="landing-docs" href="/docs">View docs <span aria-hidden="true">→</span></a>
+        </header>
+        <section class="landing-hero" aria-labelledby="landing-title">
+          <h1 class="landing-title" id="landing-title">
+            <span>Git for code</span>
+            <span>you control</span>
+          </h1>
+          <p class="landing-description">
+            Octopus is a wallet-native Git platform for builders on Sui. Create repositories,
+            manage access, and collaborate with cryptographic identity without leaving your Git workflow.
+          </p>
+          <div class="landing-actions">
+            <a class="landing-connect" href="${escapeAttr(input.loginHref)}" data-octopus-auth-popup>Connect wallet <span aria-hidden="true">↗</span></a>
+          </div>
+        </section>
+      </section>
+    </main>
+${authPopupScript}
+  </body>
+</html>`;
+};
+
+export const renderCreateRepoPage = (input: {
+  viewer?: WebViewer;
+  loginHref: string;
+}): string => {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>New repository - Octopus</title>
+${faviconLinks}
+    <style>
+${pageStyles}
+    </style>
+  </head>
+  <body>
+${topNavigation(input.viewer, { loginHref: input.loginHref, popup: true })}
+    <header>
+      <div class="bar">
+        <div class="repo-header-main">
+          <h1>New repository</h1>
+          <p class="repo-subtitle">Create a recoverable Git repository backed by Sui and Walrus.</p>
+        </div>
+      </div>
+    </header>
+    <main>
+      <div class="create-repo-layout">
+        ${renderCreateRepoPanel(input.viewer, input.loginHref)}
+      </div>
+    </main>
+${authPopupScript}
+  </body>
+</html>`;
+};
+
 export const renderDashboardPage = (repos: RepoListItem[], viewer?: WebViewer): string => {
   const latestRepos = [...repos].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
   const totalCommits = repos.reduce((sum, repo) => sum + (repo.commitCount ?? 0), 0);
@@ -3911,6 +4462,7 @@ ${topNavigation(viewer)}
           </div>
           <div class="dashboard-feed-header">
             <h2>Recent activity</h2>
+            <a class="github-button primary" href="/new">${plusIcon}<span>New repository</span></a>
           </div>
           <div class="dashboard-feed">
             ${feedCards}
@@ -4030,7 +4582,7 @@ ${topNavigation(input.viewer)}
         <h2>Private repository</h2>
         <p>${escapeHtml(input.message)}</p>
         <div class="private-gate-actions">
-          <a class="github-button primary" href="${escapeAttr(input.loginHref)}" data-octopus-auth-popup>Sign in with Sui wallet</a>
+          <a class="github-button primary" href="${escapeAttr(input.loginHref)}">Sign in with Sui wallet</a>
         </div>
       </section>
     </main>

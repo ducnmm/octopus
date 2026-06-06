@@ -20,6 +20,11 @@ import {
 } from "./auth.js";
 import { readCommitActors } from "./commit-actors.js";
 import type { ServerConfig } from "./config.js";
+import {
+  createSponsoredTransaction,
+  enokiSponsorshipEnabled,
+  executeSponsoredTransaction
+} from "./enoki.js";
 import { handleGitHttp, initBareRepository } from "./git.js";
 import { bareRepoPath } from "./git.js";
 import {
@@ -55,7 +60,9 @@ import {
 import {
   renderBlobPage,
   renderCommitsPage,
+  renderCreateRepoPage,
   renderDashboardPage,
+  renderLandingPage,
   renderPrivateRepoLoginPage,
   renderPrivateRepoUnlockPage,
   renderProfilePage,
@@ -71,8 +78,26 @@ import {
 
 const underwaterBackgroundAsset = new URL("../assets/octopus-underwater-bg.png", import.meta.url);
 const underwaterBackgroundDarkAsset = new URL("../assets/octopus-underwater-bg-dark.png", import.meta.url);
+const auroraHomeAsset = new URL("../assets/aurora-home.avif", import.meta.url);
+const walrusMascotAsset = new URL("../assets/octopus-walrus-mascot.png", import.meta.url);
+const ratchFontAsset = new URL("../assets/ratch.woff2", import.meta.url);
 const serverBuildMarker = "git-reconcile-v3";
 const staticAssetRoutes = [
+  {
+    path: "/assets/aurora-home.avif",
+    source: auroraHomeAsset,
+    type: "image/avif"
+  },
+  {
+    path: "/assets/octopus-walrus-mascot.png",
+    source: walrusMascotAsset,
+    type: "image/png"
+  },
+  {
+    path: "/assets/ratch.woff2",
+    source: ratchFontAsset,
+    type: "font/woff2"
+  },
   {
     path: "/favicon.ico",
     source: new URL("../assets/favicon/favicon.ico", import.meta.url),
@@ -667,6 +692,21 @@ export const buildServer = (config: ServerConfig) => {
     }
   };
 
+  const createRepoInput = (body: unknown) => {
+    const record = requestBodyRecord(body);
+    const input = {
+      owner: record.owner?.trim() || undefined,
+      name: record.name?.trim(),
+      visibility: record.visibility?.trim() || undefined
+    };
+
+    try {
+      return createRepoRequestSchema.parse(input);
+    } catch (error) {
+      throw httpError(error instanceof Error ? error.message : "Invalid repository input", 400);
+    }
+  };
+
   const readReadmePreview = async (
     repoPath: string,
     ref: string,
@@ -1088,8 +1128,24 @@ export const buildServer = (config: ServerConfig) => {
   });
 
   app.get("/", async (request, reply) => {
+    const viewer = webViewerFromRequest(request, config);
+    if (!viewer) {
+      await reply.type("text/html; charset=utf-8").send(renderLandingPage({
+        loginHref: webLoginUrl(request, "/")
+      }));
+      return;
+    }
+
     const repos = await visibleRepoItems(request);
-    await reply.type("text/html; charset=utf-8").send(renderDashboardPage(repos, webViewerFromRequest(request, config)));
+    await reply.type("text/html; charset=utf-8").send(renderDashboardPage(repos, viewer));
+  });
+
+  app.get("/new", async (request, reply) => {
+    const viewer = webViewerFromRequest(request, config);
+    await reply.type("text/html; charset=utf-8").send(renderCreateRepoPage({
+      viewer,
+      loginHref: webLoginUrl(request, "/new")
+    }));
   });
 
   app.get("/v1/repos", async (request) => {
@@ -1445,8 +1501,19 @@ export const buildServer = (config: ServerConfig) => {
       accountRegistryId: config.accountRegistryId,
       repoRegistryId: config.repoRegistryId,
       serverDelegatePublicKey: serverDelegate?.delegatePublicKey,
-      serverDelegateAddress: serverDelegate?.delegateAddress
+      serverDelegateAddress: serverDelegate?.delegateAddress,
+      enokiSponsoredTransactions: enokiSponsorshipEnabled(config)
     };
+  });
+
+  app.post("/v1/enoki/sponsored-transactions", async (request, reply) => {
+    const sponsored = await createSponsoredTransaction(config, request.body);
+    await reply.send(sponsored);
+  });
+
+  app.post<{ Params: { digest: string } }>("/v1/enoki/sponsored-transactions/:digest/execute", async (request, reply) => {
+    const executed = await executeSponsoredTransaction(config, request.params.digest, request.body);
+    await reply.send(executed);
   });
 
   app.post("/v1/auth/delegate", async (request, reply) => {
@@ -1467,8 +1534,12 @@ export const buildServer = (config: ServerConfig) => {
   });
 
   app.post("/v1/repos", async (request, reply) => {
-    const auth = await parseDelegateAuth(config, request);
-    const input = createRepoRequestSchema.parse(request.body);
+    const auth = await requestAuthContext(request);
+    if (!auth) {
+      throw httpError("Sign in before creating a repository", 401);
+    }
+
+    const input = createRepoInput(request.body);
     const owner = await resolveRepoOwnerNamespace(config, auth, input.owner);
     await mkdir(config.repoRoot, { recursive: true });
     await initBareRepository(config.repoRoot, owner, input.name);
@@ -1479,6 +1550,16 @@ export const buildServer = (config: ServerConfig) => {
       accountId: auth.accountId,
       ownerWallet: auth.walletAddress
     }, auth);
+
+    const isFormPost = typeof request.body === "string" ||
+      String(request.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded");
+    if (isFormPost) {
+      await reply
+        .code(303)
+        .header("location", `/${encodeURIComponent(owner)}/${encodeURIComponent(input.name)}`)
+        .send();
+      return;
+    }
 
     await reply.code(201).send({
       owner,

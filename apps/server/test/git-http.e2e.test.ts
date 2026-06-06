@@ -290,7 +290,22 @@ test("serves normal git push and clone through smart HTTP", async () => {
     manifestCount: 1
   });
 
-  const webResponse = await fetch(new URL("/", baseUrl));
+  const anonymousHomeResponse = await fetch(new URL("/", baseUrl));
+  expect(anonymousHomeResponse.status).toBe(200);
+  expect(anonymousHomeResponse.headers.get("content-type")).toContain("text/html");
+  const anonymousHomeBody = await anonymousHomeResponse.text();
+  expect(anonymousHomeBody).toContain("<h1 class=\"landing-title\" id=\"landing-title\">");
+  expect(anonymousHomeBody).toContain("Octopus is a wallet-native Git platform");
+  expect(anonymousHomeBody).toContain("Connect wallet");
+  expect(anonymousHomeBody).not.toContain("Octopus account");
+  expect(anonymousHomeBody).not.toContain(repoId);
+
+  const webSessionCookie = await createWebSessionCookie("/");
+  const webResponse = await fetch(new URL("/", baseUrl), {
+    headers: {
+      cookie: webSessionCookie
+    }
+  });
   expect(webResponse.status).toBe(200);
   expect(webResponse.headers.get("content-type")).toContain("text/html");
   const webBody = await webResponse.text();

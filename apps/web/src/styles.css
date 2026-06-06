@@ -148,12 +148,34 @@ mysten-dapp-kit-connect-button {
 }
 
 mysten-dapp-kit-connect-button::part(trigger),
+.enoki-button,
 .authorize-button {
   width: 100%;
   min-height: 40px;
   border-radius: 6px;
   font-size: 14px;
   font-weight: 700;
+}
+
+.enoki-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.enoki-button {
+  border: 1px solid var(--border-default);
+  background: var(--canvas-default);
+  color: var(--fg-default);
+  cursor: pointer;
+}
+
+.enoki-button:hover:not(:disabled) {
+  background: var(--button-hover);
+}
+
+.enoki-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 mysten-dapp-kit-connect-button::part(trigger) {
