@@ -1,34 +1,48 @@
 :root {
   color-scheme: light dark;
-  --fg-default: #24292f;
-  --fg-muted: #6e7781;
+  --fg-default: #102a35;
+  --fg-muted: #5a7884;
   --canvas-default: #ffffff;
-  --canvas-muted: #f6f8fa;
-  --border-default: #d0d7de;
-  --border-muted: #d8dee4;
-  --brand-bg: #7c3aed;
-  --brand-hover: #6d28d9;
-  --brand-ring: rgba(124, 58, 237, 0.22);
-  --danger-fg: #cf222e;
-  --success-fg: #7c3aed;
-  --button-hover: #eef1f4;
+  --canvas-muted: #eef4f6;
+  --border-default: #c7d6dc;
+  --border-muted: #d6e1e6;
+  --brand-bg: #1287aa;
+  --brand-hover: #0e7191;
+  --brand-grad: linear-gradient(135deg, #19a3c4 0%, #1577b3 100%);
+  --brand-ring: rgba(18, 135, 170, 0.28);
+  --danger-fg: #d6402c;
+  --success-fg: #0f897e;
+  --button-hover: #e3edf0;
+  --login-backdrop: url("/login-ocean.webp");
+  --login-scrim: rgba(232, 242, 245, 0.34);
+  --card-bg: rgba(255, 255, 255, 0.74);
+  --card-border: rgba(255, 255, 255, 0.7);
+  --card-shadow: rgba(12, 54, 78, 0.26);
+  --card-sheen: rgba(255, 255, 255, 0.5);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --fg-default: #e6edf3;
-    --fg-muted: #8b949e;
-    --canvas-default: #0d1117;
-    --canvas-muted: #161b22;
-    --border-default: #30363d;
-    --border-muted: #21262d;
-    --brand-bg: #8957e5;
-    --brand-hover: #a371f7;
-    --brand-ring: rgba(163, 113, 247, 0.28);
-    --danger-fg: #ff7b72;
-    --success-fg: #a371f7;
-    --button-hover: #21262d;
+    --fg-default: #e2f1f6;
+    --fg-muted: #8fb0ba;
+    --canvas-default: #0b1620;
+    --canvas-muted: #12222d;
+    --border-default: #284049;
+    --border-muted: #1d2f39;
+    --brand-bg: #2b9fd8;
+    --brand-hover: #46b0e6;
+    --brand-grad: linear-gradient(135deg, #2ea6dd 0%, #1c84c6 100%);
+    --brand-ring: rgba(56, 189, 248, 0.3);
+    --danger-fg: #ff8169;
+    --success-fg: #4cd0c0;
+    --button-hover: #1b2f3a;
+    --login-backdrop: url("/login-ocean-dark.webp");
+    --login-scrim: rgba(2, 10, 18, 0.46);
+    --card-bg: rgba(9, 22, 32, 0.7);
+    --card-border: rgba(120, 200, 230, 0.16);
+    --card-shadow: rgba(0, 8, 16, 0.55);
+    --card-sheen: rgba(120, 200, 230, 0.16);
   }
 }
 
@@ -59,6 +73,15 @@ body {
   overflow: hidden;
   border: 0;
   padding: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.embedded-auth .auth-card::before,
+.embedded-auth .auth-card h1::after {
+  display: none;
 }
 
 button {
@@ -67,32 +90,80 @@ button {
 
 .auth-shell {
   display: grid;
-  width: min(100%, 360px);
+  width: 100%;
   min-height: 100vh;
   margin: 0 auto;
   place-items: center;
   padding: 16px;
+  background-color: var(--canvas-default);
+  background-image:
+    linear-gradient(to bottom, var(--login-scrim) 0%, transparent 50%),
+    var(--login-backdrop);
+  background-position: center top, center bottom;
+  background-size: cover, cover;
+  background-repeat: no-repeat, no-repeat;
 }
 
 .auth-card {
-  width: 100%;
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
-  background: var(--canvas-default);
-  padding: 32px 16px 16px;
+  position: relative;
+  width: min(100%, 364px);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  background: var(--card-bg);
+  padding: 32px 28px 26px;
+  box-shadow:
+    0 22px 54px -16px var(--card-shadow),
+    0 4px 12px -6px var(--card-shadow),
+    inset 0 1px 0 var(--card-sheen);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .auth-card {
+    animation: card-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}
+
+@keyframes card-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 h1 {
-  margin: 0 0 22px;
+  margin: 0 0 24px;
   color: var(--fg-default);
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 700;
+  letter-spacing: -0.01em;
   line-height: 1.25;
+}
+
+.auth-card h1 {
+  position: relative;
+  padding-bottom: 14px;
+}
+
+.auth-card h1::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 40px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--brand-grad);
 }
 
 .detail-list {
   display: grid;
-  gap: 26px;
+  gap: 22px;
   margin-bottom: 28px;
 }
 
@@ -138,7 +209,7 @@ mysten-dapp-kit-connect-button {
   --popover: var(--canvas-default);
   --popover-foreground: var(--fg-default);
   --ring: var(--brand-ring);
-  --radius: 6px;
+  --radius: 8px;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
   --font-weight-medium: 700;
   --font-weight-semibold: 700;
@@ -151,10 +222,11 @@ mysten-dapp-kit-connect-button::part(trigger),
 .enoki-button,
 .authorize-button {
   width: 100%;
-  min-height: 40px;
-  border-radius: 6px;
+  min-height: 42px;
+  border-radius: 8px;
   font-size: 14px;
   font-weight: 700;
+  transition: background-color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease, opacity 0.18s ease;
 }
 
 .enoki-actions {
@@ -171,6 +243,10 @@ mysten-dapp-kit-connect-button::part(trigger),
 
 .enoki-button:hover:not(:disabled) {
   background: var(--button-hover);
+}
+
+.enoki-button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .enoki-button:disabled {
@@ -190,13 +266,24 @@ mysten-dapp-kit-connect-button::part(trigger):hover {
 
 .authorize-button {
   border: 0;
-  background: var(--brand-bg);
+  background: var(--brand-grad);
+  background-color: var(--brand-bg);
   color: #ffffff;
   cursor: pointer;
+  box-shadow:
+    0 8px 18px -8px var(--brand-ring),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 .authorize-button:hover:not(:disabled) {
   background: var(--brand-hover);
+  box-shadow:
+    0 10px 22px -8px var(--brand-ring),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.authorize-button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .authorize-button:disabled {
@@ -204,10 +291,16 @@ mysten-dapp-kit-connect-button::part(trigger):hover {
   opacity: 0.72;
 }
 
+.enoki-button:focus-visible,
+.authorize-button:focus-visible {
+  outline: 2px solid var(--brand-bg);
+  outline-offset: 2px;
+}
+
 .status {
-  margin: 12px 0 0;
+  margin: 14px 0 0;
   border: 1px solid var(--border-muted);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--canvas-muted);
   padding: 10px 12px;
   color: var(--fg-muted);
@@ -233,6 +326,6 @@ mysten-dapp-kit-connect-button::part(trigger):hover {
     border-right: 0;
     border-left: 0;
     border-radius: 0;
-    padding: 38px 28px 16px;
+    padding: 40px 28px 16px;
   }
 }
