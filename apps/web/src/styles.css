@@ -1,3 +1,10 @@
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
   color-scheme: light dark;
   --fg-default: #102a35;
@@ -327,5 +334,62 @@ mysten-dapp-kit-connect-button::part(trigger):hover {
     border-left: 0;
     border-radius: 0;
     padding: 40px 28px 16px;
+  }
+}
+
+@layer base {
+  .theme {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', sans-serif;
+  }
+  :root {
+    --background: var(--canvas-default);
+    --foreground: var(--fg-default);
+    --card: var(--card-bg);
+    --card-foreground: var(--fg-default);
+    --popover: var(--canvas-default);
+    --popover-foreground: var(--fg-default);
+    --primary: var(--brand-bg);
+    --primary-foreground: #ffffff;
+    --secondary: var(--canvas-muted);
+    --secondary-foreground: var(--fg-default);
+    --muted: var(--canvas-muted);
+    --muted-foreground: var(--fg-muted);
+    --accent: var(--canvas-muted);
+    --accent-foreground: var(--fg-default);
+    --destructive: var(--danger-fg);
+    --border: var(--border-default);
+    --input: var(--border-default);
+    --ring: var(--brand-bg);
+    --radius: 8px;
+  }
+  .dark {
+    --background: var(--canvas-default);
+    --foreground: var(--fg-default);
+    --card: var(--card-bg);
+    --card-foreground: var(--fg-default);
+    --popover: var(--canvas-default);
+    --popover-foreground: var(--fg-default);
+    --primary: var(--brand-bg);
+    --primary-foreground: #ffffff;
+    --secondary: var(--canvas-muted);
+    --secondary-foreground: var(--fg-default);
+    --muted: var(--canvas-muted);
+    --muted-foreground: var(--fg-muted);
+    --accent: var(--canvas-muted);
+    --accent-foreground: var(--fg-default);
+    --destructive: var(--danger-fg);
+    --border: var(--border-default);
+    --input: var(--border-default);
+    --ring: var(--brand-bg);
+  }
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
   }
 }

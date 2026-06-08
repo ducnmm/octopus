@@ -8,6 +8,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   envDir: resolve(here, "../.."),
   plugins: [react()],
+  resolve: {
+    alias: {
+      "@": resolve(here, "src")
+    }
+  },
   build: {
     rollupOptions: {
       output: {

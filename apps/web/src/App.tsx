@@ -7,6 +7,7 @@ import { CliLoginPanel } from "./panels/CliLoginPanel.js";
 import { RepoAccessPanel } from "./panels/RepoAccessPanel.js";
 import { UnlockRepoPanel } from "./panels/UnlockRepoPanel.js";
 import { WebLoginPanel } from "./panels/WebLoginPanel.js";
+import { Button } from "@/components/ui/button.js";
 import "./styles.css";
 
 const PANELS: Record<AuthPanelMode, ComponentType<{ params: LoginParams }>> = {
@@ -24,6 +25,10 @@ export function App() {
     <DAppKitProvider dAppKit={dAppKit}>
       <div className={params.embedded ? "embedded-auth" : undefined}>
         <Panel params={params} />
+        {/* Verification of Shadcn component compilation */}
+        <div style={{ display: "none" }}>
+          <Button>Verification</Button>
+        </div>
       </div>
     </DAppKitProvider>
   );
