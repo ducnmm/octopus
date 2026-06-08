@@ -20,6 +20,7 @@
     "@types/react": "^19.1.1",
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^6.0.1",
+    "agentation": "^3.0.2",
     "typescript": "^5.9.3",
     "vite": "^8.0.12",
     "vitest": "^4.0.14"
