@@ -12,10 +12,7 @@ export type PushAttempt = {
   createdAtMs: number;
 };
 
-export const recordPushAttempt = async (
-  config: ServerConfig,
-  attempt: PushAttempt
-): Promise<void> => {
+export const recordPushAttempt = async (config: ServerConfig, attempt: PushAttempt): Promise<void> => {
   const path = join(config.dataDir, "push_attempts.jsonl");
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify(attempt)}\n`);

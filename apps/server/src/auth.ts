@@ -50,7 +50,8 @@ const stripHexPrefix = (value: string): string => {
 };
 
 export const redactDelegateSecrets = (input: string): string => {
-  return input.replace(/(x-octopus-delegate-key:\s*)\S+/gi, "$1[redacted]")
+  return input
+    .replace(/(x-octopus-delegate-key:\s*)\S+/gi, "$1[redacted]")
     .replace(/(x-octopus-auth-token:\s*)\S+/gi, "$1[redacted]")
     .replace(/suiprivkey[1-9A-HJ-NP-Za-km-z]+/g, "[redacted-suiprivkey]");
 };
@@ -86,7 +87,9 @@ const authScopeForRequest = (request: FastifyRequest): "rest" | "git" => {
   return request.url.includes(".git") ? "git" : "rest";
 };
 
-const identityFromAuthToken = async (request: FastifyRequest): Promise<{
+const identityFromAuthToken = async (
+  request: FastifyRequest
+): Promise<{
   accountId: string;
   identity: DelegateIdentity;
   cacheKey: string;
@@ -164,10 +167,7 @@ const accountPath = (config: ServerConfig, accountId: string): string => {
   return join(config.dataDir, "sui", "accounts", `${safeAccountId}.json`);
 };
 
-const readLocalAccount = async (
-  config: ServerConfig,
-  accountId: string
-): Promise<LocalAccountState | null> => {
+const readLocalAccount = async (config: ServerConfig, accountId: string): Promise<LocalAccountState | null> => {
   try {
     return JSON.parse(await readFile(accountPath(config, accountId), "utf8")) as LocalAccountState;
   } catch {
@@ -175,10 +175,7 @@ const readLocalAccount = async (
   }
 };
 
-const writeLocalAccount = async (
-  config: ServerConfig,
-  account: LocalAccountState
-): Promise<void> => {
+const writeLocalAccount = async (config: ServerConfig, account: LocalAccountState): Promise<void> => {
   const path = accountPath(config, account.accountId);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(account, null, 2)}\n`);
@@ -208,7 +205,8 @@ export const registerLocalDelegate = async (
   }
 
   const existingKey = account.delegateKeys.find(
-    (key) => key.delegateAddress === parsed.delegateAddress || key.publicKey === stripHexPrefix(parsed.delegatePublicKey)
+    (key) =>
+      key.delegateAddress === parsed.delegateAddress || key.publicKey === stripHexPrefix(parsed.delegatePublicKey)
   );
   if (!existingKey) {
     account.delegateKeys.push({
@@ -254,7 +252,7 @@ const verifyLocalDelegate = async (
 };
 
 const fieldsAsRecord = (value: unknown): Record<string, unknown> => {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 };
 
 const normalizeMoveBytes = (value: unknown): string => {
@@ -300,10 +298,7 @@ const verifyTestnetDelegate = async (
   };
 };
 
-export const parseDelegateAuth = async (
-  config: ServerConfig,
-  request: FastifyRequest
-): Promise<AuthContext> => {
+export const parseDelegateAuth = async (config: ServerConfig, request: FastifyRequest): Promise<AuthContext> => {
   let accountId: string;
   let identity: DelegateIdentity;
   let cacheKey: string;

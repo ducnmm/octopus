@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { delegateAuthHeaders, delegateAuthTokenMessage, type DelegateAuthToken } from "@ducnmm/octopus-shared";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { buildServer } from "../src/server.js";
+import { buildServer } from "../src/app.js";
 import { readSuiRepoState } from "../src/sui.js";
 import type { ServerConfig } from "../src/config.js";
 

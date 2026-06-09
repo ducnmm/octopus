@@ -100,9 +100,8 @@ const parseSponsorInput = (body: unknown): SponsoredTransactionInput => {
   }
 
   const record = body as Record<string, unknown>;
-  const transactionKindBytes = typeof record.transactionKindBytes === "string"
-    ? record.transactionKindBytes.trim()
-    : "";
+  const transactionKindBytes =
+    typeof record.transactionKindBytes === "string" ? record.transactionKindBytes.trim() : "";
   if (!transactionKindBytes || !base64Pattern.test(transactionKindBytes)) {
     throw httpError("transactionKindBytes must be a base64 string", 400);
   }
@@ -110,11 +109,11 @@ const parseSponsorInput = (body: unknown): SponsoredTransactionInput => {
   return {
     sender: normalizeAddress(record.sender, "sender"),
     transactionKindBytes,
-    allowedAddresses: Array.isArray(record.allowedAddresses)
-      ? uniqueAddresses(record.allowedAddresses)
-      : [],
+    allowedAddresses: Array.isArray(record.allowedAddresses) ? uniqueAddresses(record.allowedAddresses) : [],
     allowedMoveCallTargets: Array.isArray(record.allowedMoveCallTargets)
-      ? record.allowedMoveCallTargets.filter((target): target is string => typeof target === "string" && Boolean(target.trim()))
+      ? record.allowedMoveCallTargets.filter(
+          (target): target is string => typeof target === "string" && Boolean(target.trim())
+        )
       : []
   };
 };
@@ -129,9 +128,10 @@ const parseExecuteInput = (digest: unknown, body: unknown): ExecuteSponsoredTran
     throw httpError("Execute request body must be an object", 400);
   }
 
-  const signature = typeof (body as Record<string, unknown>).signature === "string"
-    ? String((body as Record<string, unknown>).signature).trim()
-    : "";
+  const signature =
+    typeof (body as Record<string, unknown>).signature === "string"
+      ? String((body as Record<string, unknown>).signature).trim()
+      : "";
   if (!signature) {
     throw httpError("signature is required", 400);
   }

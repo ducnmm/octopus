@@ -71,7 +71,7 @@ const repoStatePath = (config: ServerConfig, owner: string, repo: string): strin
 };
 
 const fieldsAsRecord = (value: unknown): Record<string, unknown> => {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 };
 
 const moveFields = (value: unknown): Record<string, unknown> => {
@@ -118,10 +118,12 @@ const allDynamicFields = async (
       cursor,
       limit: 50
     });
-    fields.push(...page.data.map((field) => ({
-      name: field.name,
-      objectId: field.objectId
-    })));
+    fields.push(
+      ...page.data.map((field) => ({
+        name: field.name,
+        objectId: field.objectId
+      }))
+    );
     cursor = page.hasNextPage ? page.nextCursor : null;
   } while (cursor);
 
@@ -144,11 +146,7 @@ const dynamicFieldValue = async (
   }
 };
 
-const readRepoStateFile = async (
-  config: ServerConfig,
-  owner: string,
-  repo: string
-): Promise<SuiRepoState | null> => {
+const readRepoStateFile = async (config: ServerConfig, owner: string, repo: string): Promise<SuiRepoState | null> => {
   try {
     const raw = await readFile(repoStatePath(config, owner, repo), "utf8");
     const state = JSON.parse(raw) as SuiRepoState;
@@ -184,9 +182,7 @@ export const ensureSuiRepo = async (
   }
 
   const nextRepoObjectId =
-    config.suiMode === "testnet"
-      ? await createTestnetRepo(config, input, auth)
-      : repoObjectId(input.owner, input.repo);
+    config.suiMode === "testnet" ? await createTestnetRepo(config, input, auth) : repoObjectId(input.owner, input.repo);
 
   const now = Date.now();
   const state: SuiRepoState = {
@@ -215,10 +211,7 @@ const visibilityCode = (visibility: "public" | "private"): number => {
   return visibility === "private" ? 1 : 0;
 };
 
-const testnetTransactionSigner = (
-  config: ServerConfig,
-  auth?: AuthContext | null
-): Ed25519Keypair => {
+const testnetTransactionSigner = (config: ServerConfig, auth?: AuthContext | null): Ed25519Keypair => {
   const privateKey = config.serverSuiPrivateKeys[0] ?? auth?.delegatePrivateKey;
   if (!privateKey) {
     throw new Error(
@@ -277,9 +270,7 @@ const createTestnetRepo = async (
 
   const repoObject = result.objectChanges?.find(
     (change: { type: string; objectType?: string; objectId?: string }) =>
-      change.type === "created" &&
-      "objectType" in change &&
-      String(change.objectType).endsWith("::registry::Repo")
+      change.type === "created" && "objectType" in change && String(change.objectType).endsWith("::registry::Repo")
   );
   if (!repoObject || !("objectId" in repoObject)) {
     throw new Error("Sui create_repo did not return a Repo object ID");
@@ -533,10 +524,7 @@ const resolveTestnetRepoObjectId = async (
   }
 };
 
-const readTestnetRefs = async (
-  client: SuiJsonRpcClient,
-  refsTableId: string
-): Promise<Record<string, SuiRefState>> => {
+const readTestnetRefs = async (client: SuiJsonRpcClient, refsTableId: string): Promise<Record<string, SuiRefState>> => {
   if (!refsTableId) {
     return {};
   }
@@ -565,17 +553,12 @@ const readTestnetRefs = async (
   return refs;
 };
 
-const readAddressTableKeys = async (
-  client: SuiJsonRpcClient,
-  tableObjectId: string
-): Promise<string[]> => {
+const readAddressTableKeys = async (client: SuiJsonRpcClient, tableObjectId: string): Promise<string[]> => {
   if (!tableObjectId) {
     return [];
   }
 
-  return (await allDynamicFields(client, tableObjectId))
-    .map((field) => asString(field.name.value))
-    .filter(Boolean);
+  return (await allDynamicFields(client, tableObjectId)).map((field) => asString(field.name.value)).filter(Boolean);
 };
 
 const parseOnchainMetadata = (value: unknown): Record<string, unknown> => {
@@ -591,20 +574,11 @@ const parseOnchainMetadata = (value: unknown): Record<string, unknown> => {
 };
 
 const localManifestKey = (manifest: PackManifest): string => {
-  return [
-    manifest.refName,
-    manifest.newCommit,
-    manifest.artifactDigest,
-    String(manifest.seq)
-  ].join("\0");
+  return [manifest.refName, manifest.newCommit, manifest.artifactDigest, String(manifest.seq)].join("\0");
 };
 
 const localManifestShortKey = (manifest: Pick<PackManifest, "refName" | "newCommit" | "seq">): string => {
-  return [
-    manifest.refName,
-    manifest.newCommit,
-    String(manifest.seq)
-  ].join("\0");
+  return [manifest.refName, manifest.newCommit, String(manifest.seq)].join("\0");
 };
 
 const localManifestLookup = async (
@@ -656,7 +630,8 @@ const readTestnetRepoManifests = async (
     const newCommit = asString(value.new_commit);
     const manifest: PackManifest = {
       manifestId: asString(value.manifest_id),
-      actorWalletAddress: asString(metadata.actorWalletAddress) ||
+      actorWalletAddress:
+        asString(metadata.actorWalletAddress) ||
         asString(metadata.octopus_actor_wallet) ||
         asString(metadata.actorWallet) ||
         undefined,
@@ -676,10 +651,7 @@ const readTestnetRepoManifests = async (
       walrusBlobOwnerAddress: asString(metadata.walrusBlobOwnerAddress) || undefined,
       walrusOwnershipTransferred: metadata.walrusOwnershipTransferred === true,
       visibility: asString(metadata.visibility) === "private" ? "private" : input.visibility,
-      encrypted:
-        typeof metadata.encrypted === "boolean"
-          ? metadata.encrypted
-          : input.visibility === "private",
+      encrypted: typeof metadata.encrypted === "boolean" ? metadata.encrypted : input.visibility === "private",
       sealEnvelope: fieldsAsRecord(metadata.sealEnvelope) as PackManifest["sealEnvelope"],
       walrusMetadata: {
         octopus_repo_id: input.repoId,
@@ -710,7 +682,8 @@ const readTestnetRepoManifests = async (
       storedArtifactDigest: mergedStoredArtifactDigest,
       sealEnvelope: manifest.sealEnvelope?.mode ? manifest.sealEnvelope : local?.sealEnvelope,
       encrypted: manifest.encrypted || local?.encrypted === true,
-      artifactPath: local?.artifactPath ??
+      artifactPath:
+        local?.artifactPath ??
         join(config.dataDir, "walrus", "blobs", `${mergedStoredArtifactDigest ?? artifactDigest}.bundle`),
       storageMode: manifest.storageMode ?? local?.storageMode ?? "walrus-relay"
     });
@@ -843,9 +816,7 @@ export const listSuiRepoStates = async (config: ServerConfig): Promise<SuiRepoSt
       }
     }
 
-    return states.sort(
-      (a, b) => b.updatedAtMs - a.updatedAtMs || a.repoId.localeCompare(b.repoId)
-    );
+    return states.sort((a, b) => b.updatedAtMs - a.updatedAtMs || a.repoId.localeCompare(b.repoId));
   } catch {
     return [];
   }

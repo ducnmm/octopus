@@ -164,7 +164,9 @@ const normalizeRepoPath = (rawPath: string | undefined): string => {
 };
 
 const repoUnavailableError = (owner: string, repo: string): Error & { statusCode: number } => {
-  const error = new Error(`Repository cache is unavailable for ${owner}/${repo}. Restore it before browsing files.`) as Error & {
+  const error = new Error(
+    `Repository cache is unavailable for ${owner}/${repo}. Restore it before browsing files.`
+  ) as Error & {
     statusCode: number;
   };
   error.statusCode = 409;
@@ -179,10 +181,7 @@ const assertRepoCache = async (repoPath: string, owner: string, repo: string): P
   }
 };
 
-export const resolveCommit = async (
-  repoPath: string,
-  revision: string
-): Promise<string | null> => {
+export const resolveCommit = async (repoPath: string, revision: string): Promise<string | null> => {
   const trimmed = revision.trim();
   const candidates = [
     trimmed,
@@ -219,8 +218,7 @@ const parseCommits = (raw: string): IndexedCommit[] => {
         committedAt = "",
         subject = "",
         refs = ""
-      ] =
-        record.split("\x1f");
+      ] = record.split("\x1f");
       return {
         oid,
         parents: parents ? parents.split(" ").filter(Boolean) : [],
@@ -286,11 +284,7 @@ const parseTree = (raw: Buffer, parentPath: string): TreeEntry[] => {
     });
 };
 
-export const readTree = async (
-  repoPath: string,
-  revision: string,
-  rawPath = ""
-): Promise<TreeEntry[]> => {
+export const readTree = async (repoPath: string, revision: string, rawPath = ""): Promise<TreeEntry[]> => {
   const commit = await resolveCommit(repoPath, revision);
   if (!commit) {
     return [];
@@ -332,11 +326,7 @@ const isUtf8 = (content: Buffer): boolean => {
   return Buffer.from(content.toString("utf8"), "utf8").equals(content);
 };
 
-export const readBlob = async (
-  repoPath: string,
-  revision: string,
-  rawPath: string
-): Promise<BlobView> => {
+export const readBlob = async (repoPath: string, revision: string, rawPath: string): Promise<BlobView> => {
   const path = normalizeRepoPath(rawPath);
   if (!path) {
     throw new Error("File path is required");
@@ -348,9 +338,7 @@ export const readBlob = async (
   }
 
   const objectSpec = `${commit}:${path}`;
-  const type = (await runGit(["--git-dir", repoPath, "cat-file", "-t", objectSpec])).stdout
-    .toString("utf8")
-    .trim();
+  const type = (await runGit(["--git-dir", repoPath, "cat-file", "-t", objectSpec])).stdout.toString("utf8").trim();
   if (type !== "blob") {
     throw new Error(`${path} is not a file`);
   }
@@ -376,10 +364,7 @@ export const readBlob = async (
   };
 };
 
-export const indexRepository = async (
-  config: ServerConfig,
-  state: SuiRepoState
-): Promise<RepoIndex> => {
+export const indexRepository = async (config: ServerConfig, state: SuiRepoState): Promise<RepoIndex> => {
   const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
   await assertRepoCache(repoPath, state.owner, state.repo);
 
@@ -407,11 +392,7 @@ export const indexRepository = async (
   return index;
 };
 
-const readIndex = async (
-  config: ServerConfig,
-  owner: string,
-  repo: string
-): Promise<RepoIndex | null> => {
+const readIndex = async (config: ServerConfig, owner: string, repo: string): Promise<RepoIndex | null> => {
   try {
     return JSON.parse(await readFile(indexPath(config, owner, repo), "utf8")) as RepoIndex;
   } catch {
@@ -419,10 +400,7 @@ const readIndex = async (
   }
 };
 
-export const ensureRepoIndex = async (
-  config: ServerConfig,
-  state: SuiRepoState
-): Promise<RepoIndex> => {
+export const ensureRepoIndex = async (config: ServerConfig, state: SuiRepoState): Promise<RepoIndex> => {
   const repoPath = bareRepoPath(config.repoRoot, state.owner, state.repo);
   await assertRepoCache(repoPath, state.owner, state.repo);
 

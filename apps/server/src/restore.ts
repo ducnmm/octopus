@@ -88,8 +88,7 @@ export const restoreRepository = async (
 ): Promise<RestoreResult> => {
   const suiManifestResult = await readSuiRepoManifestsWithSource(config, owner, repo);
   const suiManifests = suiManifestResult.manifests;
-  const manifests =
-    suiManifests.length > 0 ? suiManifests : await readRepoManifests(config.dataDir, owner, repo);
+  const manifests = suiManifests.length > 0 ? suiManifests : await readRepoManifests(config.dataDir, owner, repo);
   const manifestSource = suiManifests.length > 0 ? suiManifestResult.source : "artifact-fallback";
   const manifest = latestSnapshotManifest(manifests);
   if (!manifest) {
@@ -123,9 +122,7 @@ export const restoreRepository = async (
   let restoredCommit = "";
 
   const bundlePath =
-    manifest.encrypted && manifest.sealEnvelope
-      ? join(tmpRestoreDir, "snapshot.bundle")
-      : artifact.artifactPath;
+    manifest.encrypted && manifest.sealEnvelope ? join(tmpRestoreDir, "snapshot.bundle") : artifact.artifactPath;
 
   try {
     if (manifest.encrypted && manifest.sealEnvelope) {
@@ -144,7 +141,9 @@ export const restoreRepository = async (
       });
       const plaintextDigest = await sha256File(bundlePath);
       if (plaintextDigest !== manifest.artifactDigest) {
-        throw new Error(`Decrypted artifact digest mismatch: expected ${manifest.artifactDigest}, got ${plaintextDigest}`);
+        throw new Error(
+          `Decrypted artifact digest mismatch: expected ${manifest.artifactDigest}, got ${plaintextDigest}`
+        );
       }
     }
 

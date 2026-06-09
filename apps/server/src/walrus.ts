@@ -66,9 +66,7 @@ const runWalrus = async (args: string[]): Promise<{ stdout: string; stderr: stri
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("error", (error) => {
       reject(
-        new Error(
-          `Failed to run walrus binary: ${error.message}. Set OCTOPUS_WALRUS_MODE=local to use local fallback.`
-        )
+        new Error(`Failed to run walrus binary: ${error.message}. Set OCTOPUS_WALRUS_MODE=local to use local fallback.`)
       );
     });
     child.on("close", (code) => {
@@ -178,9 +176,7 @@ const firstServerKey = (keys: string[] | undefined): string => {
     process.env.PUBLISHER_PRIVATE_KEY
   ].find((value): value is string => Boolean(value?.trim()));
   if (!key) {
-    throw new Error(
-      "OCTOPUS_WALRUS_MODE=relay requires SERVER_SUI_PRIVATE_KEYS or SERVER_SUI_PRIVATE_KEY"
-    );
+    throw new Error("OCTOPUS_WALRUS_MODE=relay requires SERVER_SUI_PRIVATE_KEYS or SERVER_SUI_PRIVATE_KEY");
   }
   return key;
 };
@@ -216,8 +212,11 @@ const relayClient = (input: {
   walrusUploadRelayUrl?: string;
 }): WalrusClient => {
   const network = normalizeWalrusNetwork(input.walrusNetwork ?? process.env.WALRUS_NETWORK);
-  const relayUrl = (input.walrusUploadRelayUrl ?? process.env.WALRUS_UPLOAD_RELAY_URL ?? defaultRelayUrl(network))
-    .replace(/\/+$/, "");
+  const relayUrl = (
+    input.walrusUploadRelayUrl ??
+    process.env.WALRUS_UPLOAD_RELAY_URL ??
+    defaultRelayUrl(network)
+  ).replace(/\/+$/, "");
   const cacheKey = `${input.signer.keyRaw}:${network}:${relayUrl}`;
   const cached = walrusClientByKey.get(cacheKey);
   if (cached) {
@@ -290,11 +289,7 @@ const isSuiAddress = (value: string | undefined): value is string => {
   return Boolean(value && /^0x[0-9a-fA-F]{64}$/.test(value));
 };
 
-const transferBlobObject = async (
-  signer: RelaySigner,
-  blobObjectId: string,
-  ownerAddress: string
-): Promise<void> => {
+const transferBlobObject = async (signer: RelaySigner, blobObjectId: string, ownerAddress: string): Promise<void> => {
   const tx = new Transaction();
   tx.transferObjects([tx.object(blobObjectId)], ownerAddress);
   const digest = await executeWalrusTransaction(signer, tx);
@@ -367,11 +362,7 @@ const storeWithWalrusRelay = async (
   };
 };
 
-const readWithAggregator = async (
-  blobId: string,
-  outputPath: string,
-  aggregatorUrl?: string
-): Promise<void> => {
+const readWithAggregator = async (blobId: string, outputPath: string, aggregatorUrl?: string): Promise<void> => {
   const baseUrl = (aggregatorUrl ?? process.env.WALRUS_AGGREGATOR_URL ?? "").replace(/\/+$/, "");
   if (!baseUrl) {
     throw new Error("WALRUS_AGGREGATOR_URL is not configured");
