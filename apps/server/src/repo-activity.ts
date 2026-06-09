@@ -132,7 +132,11 @@ const manifestActivity = (
       ...proof("Manifest", manifest.manifestId),
       ...proof("Commit", manifest.newCommit),
       ...proof("Walrus blob", manifest.walrusBlobId),
-      ...proof("Blob object", manifest.walrusBlobObjectId, manifest.walrusBlobObjectId ? suiExplorerObjectHref(config, manifest.walrusBlobObjectId) : undefined),
+      ...proof(
+        "Blob object",
+        manifest.walrusBlobObjectId,
+        manifest.walrusBlobObjectId ? suiExplorerObjectHref(config, manifest.walrusBlobObjectId) : undefined
+      ),
       { label: "Storage", value: storage }
     ]
   };
@@ -162,19 +166,18 @@ export const listRepoActivity = async (
       ]
     },
     ...manifests.map((manifest) => manifestActivity(config, manifest, pushActors.get(manifest.manifestId))),
-    ...pullRequests.map((pullRequest): RepoActivityItem => ({
-      id: `pull_request:${pullRequest.number}`,
-      kind: "pull_request",
-      title: `Opened pull request #${pullRequest.number}`,
-      description: `${shortRef(pullRequest.headRef)} into ${shortRef(pullRequest.baseRef)} · ${pullRequest.title}`,
-      actorWalletAddress: pullRequest.authorWalletAddress,
-      createdAtMs: pullRequest.createdAtMs,
-      href: `/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repo)}/pulls/${pullRequest.number}`,
-      proof: [
-        ...proof("Base", pullRequest.baseCommit),
-        ...proof("Head", pullRequest.headCommit)
-      ]
-    })),
+    ...pullRequests.map(
+      (pullRequest): RepoActivityItem => ({
+        id: `pull_request:${pullRequest.number}`,
+        kind: "pull_request",
+        title: `Opened pull request #${pullRequest.number}`,
+        description: `${shortRef(pullRequest.headRef)} into ${shortRef(pullRequest.baseRef)} · ${pullRequest.title}`,
+        actorWalletAddress: pullRequest.authorWalletAddress,
+        createdAtMs: pullRequest.createdAtMs,
+        href: `/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repo)}/pulls/${pullRequest.number}`,
+        proof: [...proof("Base", pullRequest.baseCommit), ...proof("Head", pullRequest.headCommit)]
+      })
+    ),
     ...accessRecords.map((record): RepoActivityItem => {
       const action = record.action === "add" ? "granted" : "removed";
       const role = record.role === "reader" ? "Reader" : "Writer";
@@ -186,7 +189,11 @@ export const listRepoActivity = async (
         actorWalletAddress: record.actorWalletAddress,
         createdAtMs: record.createdAtMs,
         proof: [
-          ...proof("Transaction", record.txDigest, record.txDigest ? suiExplorerTxHref(config, record.txDigest) : undefined),
+          ...proof(
+            "Transaction",
+            record.txDigest,
+            record.txDigest ? suiExplorerTxHref(config, record.txDigest) : undefined
+          ),
           ...proof("Contributor", record.walletAddress),
           ...proof("Role", role)
         ]

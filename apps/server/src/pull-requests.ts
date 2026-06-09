@@ -90,7 +90,10 @@ const runGit = async (args: string[]): Promise<GitResult> => {
   });
 };
 
-const runGitStdoutPrefix = async (args: string[], maxBytes: number): Promise<{ stdout: Buffer; truncated: boolean }> => {
+const runGitStdoutPrefix = async (
+  args: string[],
+  maxBytes: number
+): Promise<{ stdout: Buffer; truncated: boolean }> => {
   if (maxBytes <= 0) {
     return { stdout: Buffer.alloc(0), truncated: true };
   }
@@ -149,7 +152,7 @@ const emptyStore = (): PullRequestStore => ({
 });
 
 const normalizeStore = (value: unknown): PullRequestStore => {
-  const raw = value && typeof value === "object" ? value as Partial<PullRequestStore> : {};
+  const raw = value && typeof value === "object" ? (value as Partial<PullRequestStore>) : {};
   const pullRequests = Array.isArray(raw.pullRequests) ? raw.pullRequests : [];
   const maxNumber = pullRequests.reduce((max, pullRequest) => {
     return Math.max(max, typeof pullRequest.number === "number" ? pullRequest.number : 0);
@@ -157,9 +160,7 @@ const normalizeStore = (value: unknown): PullRequestStore => {
 
   return {
     version: 1,
-    nextNumber: typeof raw.nextNumber === "number" && raw.nextNumber > maxNumber
-      ? raw.nextNumber
-      : maxNumber + 1,
+    nextNumber: typeof raw.nextNumber === "number" && raw.nextNumber > maxNumber ? raw.nextNumber : maxNumber + 1,
     pullRequests
   };
 };
@@ -187,7 +188,10 @@ const assertRepoCache = async (repoPath: string, state: SuiRepoState): Promise<v
   try {
     await access(repoPath);
   } catch {
-    throw httpError(`Repository cache is unavailable for ${state.repoId}. Restore it before opening pull requests.`, 409);
+    throw httpError(
+      `Repository cache is unavailable for ${state.repoId}. Restore it before opening pull requests.`,
+      409
+    );
   }
 };
 
@@ -245,11 +249,7 @@ const parseCommits = (raw: string): IndexedCommit[] => {
     });
 };
 
-const readRangeCommits = async (
-  repoPath: string,
-  fromCommit: string,
-  toCommit: string
-): Promise<IndexedCommit[]> => {
+const readRangeCommits = async (repoPath: string, fromCommit: string, toCommit: string): Promise<IndexedCommit[]> => {
   if (fromCommit === toCommit) {
     return [];
   }
@@ -266,15 +266,9 @@ const readRangeCommits = async (
   return parseCommits(result.stdout.toString("utf8"));
 };
 
-const readMergeBase = async (
-  repoPath: string,
-  baseCommit: string,
-  headCommit: string
-): Promise<string> => {
+const readMergeBase = async (repoPath: string, baseCommit: string, headCommit: string): Promise<string> => {
   try {
-    return (await runGit(["--git-dir", repoPath, "merge-base", baseCommit, headCommit])).stdout
-      .toString("utf8")
-      .trim();
+    return (await runGit(["--git-dir", repoPath, "merge-base", baseCommit, headCommit])).stdout.toString("utf8").trim();
   } catch {
     throw httpError("Pull request branches do not share a common history", 409);
   }
@@ -298,11 +292,7 @@ const parseDiffStats = (raw: string): PullRequestDiffFile[] => {
     .filter((file) => file.path.length > 0);
 };
 
-export const listPullRequests = async (
-  config: ServerConfig,
-  owner: string,
-  repo: string
-): Promise<PullRequest[]> => {
+export const listPullRequests = async (config: ServerConfig, owner: string, repo: string): Promise<PullRequest[]> => {
   const store = await readStore(config, owner, repo);
   return [...store.pullRequests].sort((a, b) => b.number - a.number);
 };
@@ -352,10 +342,8 @@ export const createPullRequest = async (
   }
 
   const store = await readStore(config, state.owner, state.repo);
-  const duplicate = store.pullRequests.find((pullRequest) =>
-    pullRequest.status === "open" &&
-    pullRequest.baseRef === baseRef &&
-    pullRequest.headRef === headRef
+  const duplicate = store.pullRequests.find(
+    (pullRequest) => pullRequest.status === "open" && pullRequest.baseRef === baseRef && pullRequest.headRef === headRef
   );
   if (duplicate) {
     throw httpError(`Pull request #${duplicate.number} is already open for these branches`, 409);
@@ -402,18 +390,14 @@ export const comparePullRequest = async (
   const mergeBaseCommit = await readMergeBase(repoPath, baseCommit, headCommit);
   const commits = await readRangeCommits(repoPath, mergeBaseCommit, headCommit);
   const files = parseDiffStats(
-    (await runGit(["--git-dir", repoPath, "diff", "--numstat", "--find-renames", mergeBaseCommit, headCommit])).stdout
-      .toString("utf8")
+    (
+      await runGit(["--git-dir", repoPath, "diff", "--numstat", "--find-renames", mergeBaseCommit, headCommit])
+    ).stdout.toString("utf8")
   );
-  const patch = await runGitStdoutPrefix([
-    "--git-dir",
-    repoPath,
-    "diff",
-    "--find-renames",
-    "--patch",
-    mergeBaseCommit,
-    headCommit
-  ], PATCH_LIMIT_BYTES);
+  const patch = await runGitStdoutPrefix(
+    ["--git-dir", repoPath, "diff", "--find-renames", "--patch", mergeBaseCommit, headCommit],
+    PATCH_LIMIT_BYTES
+  );
 
   return {
     baseCommit,

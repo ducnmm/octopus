@@ -1,0 +1,9 @@
+**/dist/**
+**/node_modules/**
+**/.next/**
+**/.source/**
+apps/web/dist/**
+data/**
+coverage/**
+pnpm-lock.yaml
+*.md

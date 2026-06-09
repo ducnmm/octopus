@@ -48,10 +48,7 @@ const parseHexBytes = (hex: string): number[] => {
 };
 
 const deriveLocalKey = (repoId: string): Buffer => {
-  return createHash("sha256")
-    .update("octopus-local-seal:")
-    .update(repoId)
-    .digest();
+  return createHash("sha256").update("octopus-local-seal:").update(repoId).digest();
 };
 
 export const sealKeyIdForRepo = (repoObjectId: string): string => {
@@ -59,10 +56,7 @@ export const sealKeyIdForRepo = (repoObjectId: string): string => {
 };
 
 const localSealKeyIdForRepo = (repoId: string): string => {
-  return createHash("sha256")
-    .update("octopus-repo-key:")
-    .update(repoId)
-    .digest("hex");
+  return createHash("sha256").update("octopus-repo-key:").update(repoId).digest("hex");
 };
 
 const parseSealServerConfigs = (raw: string | undefined): KeyServerConfig[] => {
@@ -152,11 +146,7 @@ const publicKeyServerConfig = (config: KeyServerConfig): Omit<KeyServerConfig, "
   return safeConfig;
 };
 
-const sealClient = (input: {
-  suiRpcUrl?: string;
-  suiNetwork?: string;
-  keyServers: KeyServerConfig[];
-}): SealClient => {
+const sealClient = (input: { suiRpcUrl?: string; suiNetwork?: string; keyServers: KeyServerConfig[] }): SealClient => {
   const network = input.suiNetwork === "mainnet" ? "mainnet" : "testnet";
   const client = new SuiJsonRpcClient({
     url: input.suiRpcUrl ?? process.env.SUI_RPC_URL ?? "https://fullnode.testnet.sui.io:443",

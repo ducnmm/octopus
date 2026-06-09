@@ -1,10 +1,5 @@
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
-import {
-  isValidSuiAddress,
-  isValidSuiNSName,
-  normalizeSuiAddress,
-  normalizeSuiNSName
-} from "@mysten/sui/utils";
+import { isValidSuiAddress, isValidSuiNSName, normalizeSuiAddress, normalizeSuiNSName } from "@mysten/sui/utils";
 import type { AuthContext } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 
@@ -27,10 +22,7 @@ const nameServiceClient = (config: ServerConfig): SuiJsonRpcClient => {
   return new SuiJsonRpcClient({ url: config.suiRpcUrl, network: config.suiNetwork as "testnet" });
 };
 
-const resolvePrimarySuiNSName = async (
-  config: ServerConfig,
-  walletAddress: string
-): Promise<string | null> => {
+const resolvePrimarySuiNSName = async (config: ServerConfig, walletAddress: string): Promise<string | null> => {
   if (config.suiMode !== "testnet") {
     return null;
   }
@@ -47,10 +39,7 @@ const resolvePrimarySuiNSName = async (
   }
 };
 
-const resolveSuiNSAddress = async (
-  config: ServerConfig,
-  name: string
-): Promise<string | null> => {
+const resolveSuiNSAddress = async (config: ServerConfig, name: string): Promise<string | null> => {
   if (config.suiMode !== "testnet") {
     throw errorWithStatus("SuiNS owner namespaces require testnet Sui name service resolution", 400);
   }

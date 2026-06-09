@@ -1,14 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  writeFile
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { encryptArtifactForRepo, type SealEnvelope } from "./seal.js";
@@ -77,12 +69,7 @@ const runGit = async (args: string[]): Promise<GitResult> => {
 };
 
 export const listRefs = async (repoPath: string): Promise<GitRefMap> => {
-  const result = await runGit([
-    "--git-dir",
-    repoPath,
-    "for-each-ref",
-    "--format=%(refname) %(objectname)"
-  ]);
+  const result = await runGit(["--git-dir", repoPath, "for-each-ref", "--format=%(refname) %(objectname)"]);
   const refs: GitRefMap = new Map();
 
   for (const line of result.stdout.toString("utf8").split(/\r?\n/)) {
@@ -134,7 +121,10 @@ const isDurableRef = (refName: string): boolean => {
   return refName.startsWith("refs/heads/") || refName.startsWith("refs/tags/");
 };
 
-const changedRefs = (before: GitRefMap, after: GitRefMap): Array<{
+const changedRefs = (
+  before: GitRefMap,
+  after: GitRefMap
+): Array<{
   refName: string;
   oldCommit: string | null;
   newCommit: string;
@@ -202,8 +192,7 @@ export const createPushArtifacts = async (input: {
     const artifactStats = await stat(bundlePath);
     const repoId = `${input.owner}/${input.repo}`;
     const visibility = input.visibility ?? "public";
-    const sourcePath =
-      visibility === "private" ? join(tmpArtifactDir, "snapshot.bundle.sealed") : bundlePath;
+    const sourcePath = visibility === "private" ? join(tmpArtifactDir, "snapshot.bundle.sealed") : bundlePath;
     const sealEnvelope =
       visibility === "private"
         ? await encryptArtifactForRepo({
@@ -299,10 +288,7 @@ export const createPushArtifacts = async (input: {
         seq: ref.seq
       };
 
-      await writeFile(
-        join(manifestDir, `${ref.manifestId}.json`),
-        `${JSON.stringify(manifest, null, 2)}\n`
-      );
+      await writeFile(join(manifestDir, `${ref.manifestId}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
       manifests.push(manifest);
     }
 
@@ -312,11 +298,7 @@ export const createPushArtifacts = async (input: {
   }
 };
 
-export const readRepoManifests = async (
-  dataDir: string,
-  owner: string,
-  repo: string
-): Promise<PackManifest[]> => {
+export const readRepoManifests = async (dataDir: string, owner: string, repo: string): Promise<PackManifest[]> => {
   const manifestDir = join(dataDir, "manifests", owner, repo);
 
   try {

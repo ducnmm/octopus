@@ -22,11 +22,7 @@ type GitResult = {
   stderr: Buffer;
 };
 
-const runGit = async (
-  args: string[],
-  input?: Buffer,
-  env: NodeJS.ProcessEnv = process.env
-): Promise<GitResult> => {
+const runGit = async (args: string[], input?: Buffer, env: NodeJS.ProcessEnv = process.env): Promise<GitResult> => {
   return await new Promise((resolvePromise, reject) => {
     const child = spawn("git", args, {
       env,
@@ -88,10 +84,7 @@ const normalizeHeadRef = (refName?: string | null): string => {
   return defaultBranchRef;
 };
 
-export const setBareRepositoryHead = async (
-  repoPath: string,
-  refName?: string | null
-): Promise<void> => {
+export const setBareRepositoryHead = async (repoPath: string, refName?: string | null): Promise<void> => {
   await runGit(["--git-dir", repoPath, "symbolic-ref", "HEAD", normalizeHeadRef(refName)]);
 };
 
@@ -118,11 +111,7 @@ export const initBareRepository = async (
   return path;
 };
 
-export const assertRepositoryExists = async (
-  repoRoot: string,
-  owner: string,
-  repo: string
-): Promise<string> => {
+export const assertRepositoryExists = async (repoRoot: string, owner: string, repo: string): Promise<string> => {
   const path = bareRepoPath(repoRoot, owner, repo);
   await access(path);
   return path;
@@ -231,7 +220,7 @@ export const handleGitHttp = async (
       url.pathname.endsWith("/info/refs") &&
       url.searchParams.get("service") === "git-receive-pack");
   const isUploadPackRequest =
-    request.method === "POST" && url.pathname.endsWith("/git-upload-pack") ||
+    (request.method === "POST" && url.pathname.endsWith("/git-upload-pack")) ||
     (request.method === "GET" &&
       url.pathname.endsWith("/info/refs") &&
       url.searchParams.get("service") === "git-upload-pack");
@@ -381,7 +370,9 @@ export const handleGitHttp = async (
           rollbackError
             ? `Ref rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`
             : undefined
-        ].filter(Boolean).join("\n"),
+        ]
+          .filter(Boolean)
+          .join("\n"),
         actor: auth?.walletAddress,
         createdAtMs: Date.now()
       });
