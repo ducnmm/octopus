@@ -2,22 +2,32 @@ import { describe, expect, it } from "vitest";
 import { authPanelMode, browserFlowTarget, loginParamsFromSearch, type LoginRuntimeDefaults } from "./login-params.js";
 
 const defaults: LoginRuntimeDefaults = {
+  server: "http://127.0.0.1:48787",
   packageId: "0xpackage",
   accountRegistryId: "0xaccounts",
   repoRegistryId: "0xrepos"
 };
 
 describe("login params", () => {
-  it("defaults to CLI mode and runtime registry IDs", () => {
+  it("defaults a bare visit to web mode against the runtime server", () => {
     const params = loginParamsFromSearch("", defaults);
 
-    expect(authPanelMode(params.mode)).toBe("cli");
+    expect(authPanelMode(params.mode)).toBe("web");
     expect(params.autoStart).toBe(false);
     expect(params.embedded).toBe(false);
+    expect(params.server).toBe(defaults.server);
     expect(params.returnTo).toBe("/");
     expect(params.packageId).toBe(defaults.packageId);
     expect(params.accountRegistryId).toBe(defaults.accountRegistryId);
     expect(params.repoRegistryId).toBe(defaults.repoRegistryId);
+    expect(browserFlowTarget(params, params.returnTo, "http://localhost:45173")).toBe("http://127.0.0.1:48787/");
+  });
+
+  it("defaults to CLI mode when a login callback is present", () => {
+    const params = loginParamsFromSearch("?callback=http%3A%2F%2F127.0.0.1%3A52000%2Fcallback", defaults);
+
+    expect(authPanelMode(params.mode)).toBe("cli");
+    expect(params.callback).toBe("http://127.0.0.1:52000/callback");
   });
 
   it("parses web mode with embedded autostart and return target", () => {

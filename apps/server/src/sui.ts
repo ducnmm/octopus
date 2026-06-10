@@ -3,10 +3,12 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { Transaction } from "@mysten/sui/transactions";
+import { isValidSuiAddress, normalizeSuiAddress } from "@mysten/sui/utils";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { keypairFromPrivateKey, type AuthContext } from "./auth.js";
 import { readRepoManifests, type PackManifest } from "./artifacts.js";
 import type { ServerConfig } from "./config.js";
+import { httpError } from "./lib/http-error.js";
 
 export type SuiRefState = {
   refName: string;
@@ -211,6 +213,69 @@ const visibilityCode = (visibility: "public" | "private"): number => {
   return visibility === "private" ? 1 : 0;
 };
 
+const asSuiObjectId = (value: string | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  try {
+    const normalized = normalizeSuiAddress(value);
+    return isValidSuiAddress(normalized) ? normalized : null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveAccountObjectId = async (config: ServerConfig, walletAddress: string): Promise<string | null> => {
+  if (!config.accountRegistryId) {
+    return null;
+  }
+
+  const client = new SuiJsonRpcClient({ url: config.suiRpcUrl, network: config.suiNetwork as "testnet" });
+  const registry = await client.getObject({ id: config.accountRegistryId, options: { showContent: true } });
+  const accountsTableId = tableId(moveFields(registry.data?.content).accounts);
+  if (!accountsTableId) {
+    return null;
+  }
+
+  try {
+    const entry = await client.getDynamicFieldObject({
+      parentId: accountsTableId,
+      name: { type: "address", value: walletAddress }
+    });
+    return asSuiObjectId(asString(moveFields(entry.data?.content).value));
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Web sessions fall back to a synthetic `web:<hash>` account id when the login
+ * flow could not resolve the on-chain Account object (e.g. the session predates
+ * the testnet registry config). Testnet transactions need the real object id,
+ * so resolve it from the account registry by wallet address before signing.
+ */
+const requireAccountObjectId = async (
+  config: ServerConfig,
+  auth: AuthContext,
+  explicitAccountId?: string
+): Promise<string> => {
+  const direct = asSuiObjectId(explicitAccountId) ?? asSuiObjectId(auth.accountId);
+  if (direct) {
+    return direct;
+  }
+
+  const walletAddress = asSuiObjectId(auth.walletAddress);
+  const resolved = walletAddress ? await resolveAccountObjectId(config, walletAddress) : null;
+  if (resolved) {
+    return resolved;
+  }
+
+  throw httpError(
+    `No on-chain Octopus account found for wallet ${auth.walletAddress}. Sign out and sign in again with your wallet, then retry.`,
+    400
+  );
+};
+
 const testnetTransactionSigner = (config: ServerConfig, auth?: AuthContext | null): Ed25519Keypair => {
   const privateKey = config.serverSuiPrivateKeys[0] ?? auth?.delegatePrivateKey;
   if (!privateKey) {
@@ -240,12 +305,13 @@ const createTestnetRepo = async (
     throw new Error("SUI_PACKAGE_ID and OCTOPUS_REPO_REGISTRY_ID are required for testnet repo creation");
   }
 
+  const accountObjectId = await requireAccountObjectId(config, auth, input.accountId);
   const tx = new Transaction();
   tx.moveCall({
     target: `${config.suiPackageId}::registry::create_repo`,
     arguments: [
       tx.object(config.repoRegistryId),
-      tx.object(input.accountId ?? auth.accountId),
+      tx.object(accountObjectId),
       tx.pure.string(`${input.owner}/${input.repo}`),
       tx.pure.string(input.repo),
       tx.pure.u8(visibilityCode(input.visibility)),
@@ -267,6 +333,10 @@ const createTestnetRepo = async (
   if (error) {
     throw new Error(`Sui create_repo failed: ${error}`);
   }
+
+  // Wait until the fullnode has indexed the transaction so the registry lookup
+  // on the very next request (e.g. the post-create redirect) can see the repo.
+  await client.waitForTransaction({ digest: result.digest });
 
   const repoObject = result.objectChanges?.find(
     (change: { type: string; objectType?: string; objectId?: string }) =>
@@ -364,6 +434,7 @@ const pushRefOnTestnet = async (
     throw new Error("SUI_PACKAGE_ID is required for testnet push_ref");
   }
 
+  const accountObjectId = await requireAccountObjectId(config, auth);
   const onchainMetadata = JSON.stringify({
     v: 1,
     localManifestId: manifest.manifestId,
@@ -381,7 +452,7 @@ const pushRefOnTestnet = async (
     target: `${config.suiPackageId}::registry::push_ref`,
     arguments: [
       tx.object(state.repoObjectId),
-      tx.object(auth.accountId),
+      tx.object(accountObjectId),
       tx.pure.string(manifest.refName),
       tx.pure.string(manifest.oldCommit ?? ""),
       tx.pure.string(manifest.newCommit),
@@ -702,7 +773,12 @@ const readTestnetRepoState = async (
   }
 
   const client = testnetClient(config);
-  const repoObjectId = await resolveTestnetRepoObjectId(config, client, owner, repo);
+  // The registry's dynamic-field index can lag a freshly executed create_repo;
+  // fall back to the repo object id recorded in the local mirror at creation.
+  const mirroredObjectId = (await readRepoStateFile(config, owner, repo))?.repoObjectId;
+  const repoObjectId =
+    (await resolveTestnetRepoObjectId(config, client, owner, repo)) ??
+    (mirroredObjectId?.startsWith("0x") ? mirroredObjectId : null);
   if (!repoObjectId) {
     return null;
   }
@@ -711,7 +787,10 @@ const readTestnetRepoState = async (
     id: repoObjectId,
     options: { showContent: true }
   });
-  const fields = moveFields(object.data?.content);
+  if (!object.data) {
+    return null;
+  }
+  const fields = moveFields(object.data.content);
   const repoId = asString(fields.repo_id) || `${owner}/${repo}`;
   const visibility = visibilityFromCode(fields.visibility);
   const refsTableId = tableId(fields.refs);

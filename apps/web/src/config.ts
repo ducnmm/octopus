@@ -10,6 +10,9 @@ const optionalNumber = (value: string | undefined): number | undefined => {
 };
 
 export const runtimeConfig = {
+  server:
+    import.meta.env.VITE_OCTOPUS_SERVER_URL ??
+    (import.meta.env.DEV ? "http://127.0.0.1:48787" : "https://octopus-server.up.railway.app"),
   suiNetwork: (import.meta.env.VITE_SUI_NETWORK ?? "testnet") as "testnet" | "mainnet" | "devnet" | "localnet",
   suiRpcUrl: import.meta.env.VITE_SUI_RPC_URL ?? "https://fullnode.testnet.sui.io:443",
   packageId: import.meta.env.VITE_SUI_PACKAGE_ID ?? "",
