@@ -13,7 +13,8 @@ import {
 import type { Repositories } from "../repositories/index.js";
 import type { Services } from "../services/index.js";
 import type { SuiRepoState } from "../sui.js";
-import { renderPrivateRepoLoginPage, renderPrivateRepoUnlockPage, toRepoListItem } from "@octopus/web/views/pages.js";
+import { toRepoListItem } from "@ducnmm/octopus-shared";
+import { renderPrivateRepoLoginPage, renderPrivateRepoUnlockPage } from "@octopus/web/views/pages.js";
 
 const statusCodeOf = (error: unknown): number =>
   typeof (error as Error & { statusCode?: unknown }).statusCode === "number"
@@ -82,9 +83,11 @@ export const createRouteContext = (config: ServerConfig, repositories: Repositor
     if (repoContentUnlocked(request, state)) {
       return;
     }
+    const hasSession = Boolean(webSessionEntryFromRequest(request));
     throw httpError(
       "Repository content is locked. Unlock this repository with your wallet first.",
-      webSessionEntryFromRequest(request) ? 423 : 401
+      hasSession ? 423 : 401,
+      hasSession ? "repo_locked" : "login_required"
     );
   };
 

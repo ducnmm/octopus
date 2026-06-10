@@ -26,7 +26,8 @@ export const errorHandlerPlugin = fp(
           "request failed"
         );
       }
-      await reply.code(statusCode).send({ error: message });
+      const code = (nextError as Error & { code?: unknown }).code;
+      await reply.code(statusCode).send(typeof code === "string" ? { error: message, code } : { error: message });
     });
   },
   { name: "octopus-error-handler" }

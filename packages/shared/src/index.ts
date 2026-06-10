@@ -158,6 +158,8 @@ export type RepoSummary = {
   gitRemotePath: string;
 };
 
+export * from "./view-models.js";
+
 export const envInt = (value: string | undefined, fallback: number): number => {
   if (!value) {
     return fallback;

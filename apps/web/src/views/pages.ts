@@ -1,5 +1,4 @@
 import type {
-  SuiRepoState,
   BlobView,
   IndexedCommit,
   RepoIndex,
@@ -14,89 +13,21 @@ import type {
 import { faviconLinks, pageStyles } from "./styles.js";
 import { authPopupScript } from "./scripts.js";
 
-export type RepoRefListItem = {
-  name: string;
-  shortName: string;
-  commitDigest: string;
-  updatedAtMs: number;
-  isDefault: boolean;
-};
+// These types/helpers moved to @ducnmm/octopus-shared; re-exported here until
+// the legacy string-template views are deleted.
+import {
+  toRepoListItem,
+  type CommitActorMap,
+  type RepoListItem,
+  type RepoRefListItem,
+  type WebViewer
+} from "@ducnmm/octopus-shared";
 
-export type RepoListItem = {
-  owner: string;
-  ownerWallet: string;
-  name: string;
-  repoId: string;
-  visibility: SuiRepoState["visibility"];
-  gitRemotePath: string;
-  repoObjectId: string;
-  defaultBranch: string;
-  defaultBranchCommit: string | null;
-  refCount: number;
-  refs: RepoRefListItem[];
-  manifestCount: number;
-  readers: string[];
-  writers: string[];
-  commitCount?: number;
-  commitDates?: string[];
-  pullRequestCount?: number;
-  activityCount?: number;
-  createdAtMs: number;
-  updatedAtMs: number;
-};
-
-export type WebViewer = {
-  walletAddress: string;
-} | null;
-
-export type CommitActorMap = Record<string, string | undefined>;
+export { toRepoListItem };
+export type { CommitActorMap, RepoListItem, RepoRefListItem, WebViewer };
 
 const shortRef = (ref: string): string => {
   return ref.replace(/^refs\/heads\//, "").replace(/^refs\/tags\//, "");
-};
-
-const repoBranchRefs = (state: SuiRepoState): RepoRefListItem[] => {
-  const allRefs = Object.values(state.refs);
-  const branchRefs = allRefs.filter((ref) => ref.refName.startsWith("refs/heads/"));
-  const refs = branchRefs.length > 0 ? branchRefs : allRefs;
-
-  return refs
-    .map((ref) => ({
-      name: ref.refName,
-      shortName: shortRef(ref.refName),
-      commitDigest: ref.commitDigest,
-      updatedAtMs: ref.updatedAtMs,
-      isDefault: ref.refName === state.defaultBranch
-    }))
-    .sort((a, b) => {
-      if (a.isDefault !== b.isDefault) {
-        return a.isDefault ? -1 : 1;
-      }
-      return a.shortName.localeCompare(b.shortName);
-    });
-};
-
-export const toRepoListItem = (state: SuiRepoState): RepoListItem => {
-  const refs = repoBranchRefs(state);
-
-  return {
-    owner: state.owner,
-    ownerWallet: state.ownerWallet,
-    name: state.repo,
-    repoId: state.repoId,
-    visibility: state.visibility,
-    gitRemotePath: `/${state.owner}/${state.repo}.git`,
-    repoObjectId: state.repoObjectId,
-    defaultBranch: state.defaultBranch,
-    defaultBranchCommit: state.refs[state.defaultBranch]?.commitDigest ?? null,
-    refCount: refs.length,
-    refs,
-    manifestCount: state.manifests.length,
-    readers: state.readers ?? [],
-    writers: state.writers ?? [],
-    createdAtMs: state.createdAtMs,
-    updatedAtMs: state.updatedAtMs
-  };
 };
 
 const escapeHtml = (value: string): string => {

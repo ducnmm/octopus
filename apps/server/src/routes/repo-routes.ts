@@ -18,6 +18,7 @@ import {
 } from "../lib/request-helpers.js";
 import { webViewerFromRequest } from "../plugins/auth-context.js";
 import type { Repositories } from "../repositories/index.js";
+import { toRepoListItem } from "@ducnmm/octopus-shared";
 import {
   renderBlobPage,
   renderCommitsPage,
@@ -27,8 +28,7 @@ import {
   renderProfilePage,
   renderRepoAccessPage,
   renderRepoActivityPage,
-  renderRepoPage,
-  toRepoListItem
+  renderRepoPage
 } from "@octopus/web/views/pages.js";
 import type { RouteDeps } from "./index.js";
 
@@ -247,6 +247,24 @@ export const repoRoutes = async (app: FastifyInstance, deps: RouteDeps) => {
     await reply
       .type("text/html; charset=utf-8")
       .send(renderProfilePage(request.params.owner, repoItems, webViewerFromRequest(request)));
+  });
+
+  app.get<{ Params: { owner: string; repo: string } }>("/v1/repos/:owner/:repo", async (request) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    // Content-derived counts only when the repo content is unlocked; locked
+    // private repos still expose their registry metadata so the unlock page
+    // can describe the repository.
+    const repo = ctx.repoContentUnlocked(request, state)
+      ? await services.repoService.listItemWithCounts(state)
+      : toRepoListItem(state);
+    return { repo, contentUnlocked: ctx.repoContentUnlocked(request, state) };
+  });
+
+  app.get<{ Params: { owner: string; repo: string } }>("/v1/repos/:owner/:repo/commit-actors", async (request) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    ctx.requireRepoContentAccess(request, state);
+    const repoPath = repos.git.path(state.owner, state.repo);
+    return { commitActors: await repos.commitActors.read(state, repoPath) };
   });
 
   app.get<{ Params: { owner: string; repo: string } }>("/v1/repos/:owner/:repo/index", async (request) => {
