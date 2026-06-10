@@ -95,6 +95,7 @@ const serverConfigSchema = z
     dataDir: z.string().min(1),
     repoRoot: z.string().min(1),
     webUrl: urlString,
+    webDistDir: z.string().min(1).optional(),
     suiMode: z.enum(["local", "testnet"]),
     suiNetwork: z.string().min(1),
     suiRpcUrl: urlString,
@@ -143,6 +144,7 @@ export const loadConfig = (): ServerConfig => {
     dataDir,
     repoRoot: resolve(dataDir, "repos"),
     webUrl: process.env.OCTOPUS_WEB_URL ?? "http://127.0.0.1:45173",
+    webDistDir: process.env.OCTOPUS_WEB_DIST_DIR || undefined,
     suiMode: process.env.OCTOPUS_SUI_MODE === "testnet" || process.env.SUI_NETWORK === "testnet" ? "testnet" : "local",
     suiNetwork: process.env.SUI_NETWORK ?? "localnet",
     suiRpcUrl:

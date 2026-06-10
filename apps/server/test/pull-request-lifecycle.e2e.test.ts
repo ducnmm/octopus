@@ -518,93 +518,64 @@ test("rolls back refs and keeps the PR open when anchoring fails", async () => {
   expect(retryBody.pullRequest.status).toBe("merged");
 });
 
-test("web pages: status badges, gated actions, and comment round-trip", async () => {
+test("web session drives the PR lifecycle through the SPA shell and JSON API", async () => {
   const owner = delegate.address;
   const { featureCommit } = await setupRepoWithFeatureBranch("webui");
   const pull = await openPullRequest("webui");
 
-  // Anonymous viewers see the status badge but no action forms.
-  const anonymousDetail = await (await fetch(new URL(`/${owner}/webui/pulls/${pull}`, baseUrl))).text();
-  expect(anonymousDetail).toContain("status-open");
-  expect(anonymousDetail).not.toContain("Merge pull request");
-  expect(anonymousDetail).not.toContain("Close pull request");
-  expect(anonymousDetail).not.toContain("Leave a comment");
+  // Browser page URLs return the SPA shell; the React app fetches the data.
+  const pageResponse = await fetch(new URL(`/${owner}/webui/pulls/${pull}`, baseUrl), {
+    headers: { accept: "text/html" }
+  });
+  expect(pageResponse.status).toBe(200);
+  expect(pageResponse.headers.get("content-type")).toContain("text/html");
+  await expect(pageResponse.text()).resolves.toContain('<div id="root">');
 
-  // A signed-in writer sees merge, close, and comment controls.
+  // A web session cookie authenticates the JSON action endpoints.
   const cookie = await createWebSessionCookie(`/${owner}/webui/pulls/${pull}`);
-  const writerDetail = await (
-    await fetch(new URL(`/${owner}/webui/pulls/${pull}`, baseUrl), { headers: { cookie } })
-  ).text();
-  expect(writerDetail).toContain("Merge pull request");
-  expect(writerDetail).toContain("Close pull request");
-  expect(writerDetail).toContain("Leave a comment");
-  expect(writerDetail).toContain(`name="expectedHeadCommit" value="${featureCommit}"`);
+  const postWithCookie = (path: string, body: unknown) =>
+    fetch(new URL(path, baseUrl), {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(body ?? {})
+    });
 
-  // Comment form round-trip.
-  const commentPost = await fetch(new URL(`/${owner}/webui/pulls/${pull}/comments`, baseUrl), {
-    method: "POST",
-    redirect: "manual",
-    headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ body: "web comment" }).toString()
+  const commentPost = await postWithCookie(`/v1/repos/${owner}/webui/pulls/${pull}/comments`, {
+    body: "web comment"
   });
-  expect(commentPost.status).toBe(303);
-  expect(commentPost.headers.get("location")).toBe(`/${owner}/webui/pulls/${pull}`);
-  const afterComment = await (
-    await fetch(new URL(`/${owner}/webui/pulls/${pull}`, baseUrl), { headers: { cookie } })
-  ).text();
-  expect(afterComment).toContain("web comment");
-  expect(afterComment).toContain("1 comment");
+  expect(commentPost.status).toBe(201);
+  const detailAfterComment = (await (
+    await fetch(new URL(`/v1/repos/${owner}/webui/pulls/${pull}`, baseUrl))
+  ).json()) as { pullRequest: { comments: Array<{ body: string }> } };
+  expect(detailAfterComment.pullRequest.comments.map((comment) => comment.body)).toContain("web comment");
 
-  // Close via the web form, then the list page filters by status.
-  const closePost = await fetch(new URL(`/${owner}/webui/pulls/${pull}/close`, baseUrl), {
-    method: "POST",
-    redirect: "manual",
-    headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: ""
+  // Close, filter by status, reopen, then merge — all via /v1 with the cookie.
+  const closePost = await postWithCookie(`/v1/repos/${owner}/webui/pulls/${pull}/close`, {});
+  expect(closePost.status).toBe(200);
+  await expect(closePost.json()).resolves.toMatchObject({ pullRequest: { status: "closed" } });
+
+  const openList = (await (
+    await fetch(new URL(`/v1/repos/${owner}/webui/pulls?status=open`, baseUrl))
+  ).json()) as { pullRequests: unknown[] };
+  expect(openList.pullRequests).toHaveLength(0);
+  const closedList = (await (
+    await fetch(new URL(`/v1/repos/${owner}/webui/pulls?status=closed`, baseUrl))
+  ).json()) as { pullRequests: Array<{ title: string }> };
+  expect(closedList.pullRequests.map((item) => item.title)).toContain("Add feature");
+
+  const reopenPost = await postWithCookie(`/v1/repos/${owner}/webui/pulls/${pull}/reopen`, {});
+  expect(reopenPost.status).toBe(200);
+  await expect(reopenPost.json()).resolves.toMatchObject({ pullRequest: { status: "open" } });
+
+  const mergePost = await postWithCookie(`/v1/repos/${owner}/webui/pulls/${pull}/merge`, {
+    strategy: "merge",
+    expectedHeadCommit: featureCommit,
+    deleteBranch: true
   });
-  expect(closePost.status).toBe(303);
-
-  const openListPage = await (await fetch(new URL(`/${owner}/webui/pulls`, baseUrl))).text();
-  expect(openListPage).toContain("No pull requests yet.");
-  expect(openListPage).toContain("0 open");
-  expect(openListPage).toContain("1 closed");
-  const closedListPage = await (
-    await fetch(new URL(`/${owner}/webui/pulls?status=closed`, baseUrl))
-  ).text();
-  expect(closedListPage).toContain("status-closed");
-  expect(closedListPage).toContain("Add feature");
-
-  // Reopen control appears on the closed PR for the writer and works.
-  const closedDetail = await (
-    await fetch(new URL(`/${owner}/webui/pulls/${pull}`, baseUrl), { headers: { cookie } })
-  ).text();
-  expect(closedDetail).toContain("Reopen pull request");
-  const reopenPost = await fetch(new URL(`/${owner}/webui/pulls/${pull}/reopen`, baseUrl), {
-    method: "POST",
-    redirect: "manual",
-    headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: ""
-  });
-  expect(reopenPost.status).toBe(303);
-
-  // Merge via the web form; failures would land in the error query parameter.
-  const mergePost = await fetch(new URL(`/${owner}/webui/pulls/${pull}/merge`, baseUrl), {
-    method: "POST",
-    redirect: "manual",
-    headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      strategy: "merge",
-      expectedHeadCommit: featureCommit,
-      deleteBranch: "true"
-    }).toString()
-  });
-  expect(mergePost.status).toBe(303);
-  expect(mergePost.headers.get("location")).toBe(`/${owner}/webui/pulls/${pull}`);
-
-  const mergedDetail = await (
-    await fetch(new URL(`/${owner}/webui/pulls/${pull}`, baseUrl), { headers: { cookie } })
-  ).text();
-  expect(mergedDetail).toContain("status-merged");
-  expect(mergedDetail).toContain("Merged (merge)");
-  expect(mergedDetail).not.toContain("Merge pull request</button>");
+  expect(mergePost.status).toBe(200);
+  const merged = (await (
+    await fetch(new URL(`/v1/repos/${owner}/webui/pulls/${pull}`, baseUrl))
+  ).json()) as { pullRequest: { status: string; mergeStrategy?: string } };
+  expect(merged.pullRequest.status).toBe("merged");
+  expect(merged.pullRequest.mergeStrategy).toBe("merge");
 });

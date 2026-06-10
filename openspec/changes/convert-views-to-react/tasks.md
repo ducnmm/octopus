@@ -12,30 +12,30 @@
 
 ## 2. SPA foundation in apps/web
 
-- [ ] 2.1 Add `react-router` to `apps/web` and restructure `App.tsx`: router with the full URL scheme (`/`, `/new`, `/login`, `/:owner`, `/:owner/:repo`, `/:owner/:repo/commits`, `/:owner/:repo/blob/...`, `/:owner/:repo/activity`, `/:owner/:repo/settings/access`, `/:owner/:repo/pulls`, `/:owner/:repo/pulls/new`, `/:owner/:repo/pulls/:number`); keep the existing auth panels mounted at `/login` with mode query params
-- [ ] 2.2 Create `src/lib/api.ts` typed fetch client (same-origin credentials, JSON parsing, structured error type carrying status + error code)
-- [ ] 2.3 Create `useViewer` hook backed by `GET /v1/viewer` and a viewer context provider
-- [ ] 2.4 Install the shadcn/ui primitives the pages need via `pnpm dlx shadcn@latest add` (card, input, label, textarea, select, dropdown-menu, tabs, badge, avatar, table, dialog, separator, skeleton, breadcrumb, alert, tooltip, sonner) — `components.json` already configures style/aliases
-- [ ] 2.5 Build layout components on those primitives: `AppShell`, `TopNav` (viewer state, login/logout links), `PageContainer`, `Footer`, plus shared `Loading` (Skeleton-based) and `ErrorPanel` (Alert-based) components
-- [ ] 2.6 Add private-repo guard: on `401`/`403` from the API, route to the login/unlock flow (reusing `WebLoginPanel`/`UnlockRepoPanel`) and return to the requested page after success
+- [x] 2.1 Added `react-router@7` and restructured `App.tsx` into a `BrowserRouter` with the full URL scheme (tree/blob use the legacy query-param form `?ref&path` to keep old links working); auth panels stay at `/login` via `pages/AuthPage.tsx`
+- [x] 2.2 Created `src/lib/octopus-api.ts` typed fetch client (`lib/api.ts` was taken by the auth panels) — `ApiError{status,code}`, same-origin/dev-origin resolution, typed methods for every endpoint
+- [x] 2.3 Created `useViewer` context provider backed by `GET /v1/auth/web-session` (viewer, accountId, unlockedRepoIds, logout)
+- [x] 2.4 Installed shadcn primitives (card, input, label, textarea, select, dropdown-menu, tabs, badge, avatar, table, dialog, separator, skeleton, breadcrumb, alert, tooltip, sonner); removed a stray npm `package-lock.json` that made the shadcn CLI use npm; fixed Tailwind-v4-only syntax (`--spacing()`, `gap-(--var)`) emitted by the radix-nova registry for this repo's Tailwind v3
+- [x] 2.5 Built layout components: `AppShell`/`TopNav`/`PageContainer`/`Footer`, `Loading` (Skeleton), `ErrorPanel` (Alert)
+- [x] 2.6 Private-repo guard: `lib/auth-redirect.ts` + `DataBoundary` translate `login_required`/`repo_locked` API errors into the login/unlock flow with returnTo back to the requested page
 
 ## 3. Page conversion (use views/pages.ts as the functional parity reference; build every page from shadcn/ui primitives)
 
-- [ ] 3.1 Landing page (`/`) and create-repo page (`/new`)
-- [ ] 3.2 Dashboard, repo list, and owner profile pages (`/`, signed-in variant, `/:owner`) with shared repo-card/list components
-- [ ] 3.3 Repo home page (`/:owner/:repo`): `RepoHeader`, `RefSelector`, `FileTree`, README/`CloneBox` components fed by `/v1` repo, tree, and blob endpoints
-- [ ] 3.4 Commits page (`/:owner/:repo/commits`): `CommitList`/`CommitRow` with actor badges
-- [ ] 3.5 Blob page (`/:owner/:repo/blob/...`) with path breadcrumbs
-- [ ] 3.6 Activity page and access settings page (`/:owner/:repo/activity`, `/:owner/:repo/settings/access`)
-- [ ] 3.7 Pull request pages: list, create, and detail (`/pulls`, `/pulls/new`, `/pulls/:number`) including comment thread and merge/close/reopen actions against the existing `/v1` PR endpoints
-- [ ] 3.8 Port behavior from `scripts.ts` (copy-to-clipboard, form submits, tab switching) into React event handlers on shadcn primitives (`Tabs`, `Button`, form components); replace `styles.ts` with Tailwind utilities + shadcn theme variables, keeping only genuinely bespoke rules (diff/file-tree) in `styles.css`
-- [ ] 3.9 Add web component tests for key pages (landing, repo home, PR detail) and the private-repo guard; verify each converted page side-by-side against the old server-rendered output
+- [x] 3.1 Landing page (`/`, signed-out hero with aurora/mascot assets) and create-repo page (`/new`, owner namespace + visibility form via `api.createRepo`)
+- [x] 3.2 Dashboard (stats + recent-activity feed), owner profile (`/:owner`) with popular-repo grid, contribution calendar + activity (`lib/contributions.ts`); shared `RepoCard`/`RepoMetaList` (legacy `renderRepoListPage` was dead code — no route served it; skipped)
+- [x] 3.3 Repo home (`/:owner/:repo` and `/tree`): `RepoHeader`+`RepoNav`, `RefSelector`, `FileBrowser`, `CloneBox`, `ReadmePanel` (ported safe markdown renderer), `SetupGuide` for empty repos
+- [x] 3.4 Commits page with actor badges (`commit-actors` endpoint), ref selector, merge badges
+- [x] 3.5 Blob page (`/blob?ref&path` — kept the legacy query-param URL form) with breadcrumbs and file-info dropdown
+- [x] 3.6 Activity page (proof pills) and access settings page (local repos: JSON contributor API; testnet repos: wallet flow via `/login?mode=access`)
+- [x] 3.7 PR list (status filter counts), create (base/head selects), detail (merge strategy/delete-branch, close/reopen, comment thread) — all against `/v1` PR endpoints
+- [x] 3.8 `scripts.ts` behaviors became React handlers (`CopyButton`, controlled forms, dropdowns); styling is Tailwind + shadcn theme with only a `readme-body` block added to `styles.css`
+- [x] 3.9 Added jsdom + testing-library page tests (landing, dashboard, repo home, PR detail, private-repo guard redirect) — `src/pages/pages.test.tsx`
 
 ## 4. Server cutover to SPA serving
 
-- [ ] 4.1 Add an SPA static-serving plugin: serve `apps/web/dist` assets and `index.html` fallback for `GET` + `Accept: text/html` requests, registered after Git smart-HTTP, `/v1/*`, and `/healthz` so none are shadowed
-- [ ] 4.2 Remove all HTML rendering from `repo-routes.ts`, `pull-request-routes.ts`, and `route-context.ts` (delete `render*Page` imports and `text/html` page responses; private-repo interstitials become the JSON error codes from 1.6)
-- [ ] 4.3 Add server tests asserting page URLs return the SPA shell while Git smart-HTTP and `/v1` routes are unaffected
+- [x] 4.1 Added `routes/spa.ts`: serves `@octopus/web` dist (override via `OCTOPUS_WEB_DIST_DIR`) with immutable caching for hashed assets and an `index.html` not-found fallback; `git-http.ts`'s catch-all now delegates non-`.git` URLs via `reply.callNotFound()`
+- [x] 4.2 Removed all HTML rendering: HTML routes deleted from `repo-routes.ts` / `pull-request-routes.ts` (web-form PR actions superseded by `/v1`), HTML interstitials deleted from `route-context.ts`, and the `GET /login` 302 redirect removed (the SPA serves `/login`; panels fetch `/v1/auth/config`)
+- [x] 4.3 Added `test/spa-serving.test.ts` (shell for all page URLs, hashed assets, no shadowing of `/v1`/healthz/git, traversal guard) and updated both e2e suites to assert SPA shell + JSON-driven lifecycle
 
 ## 5. Delete legacy views and finalize
 

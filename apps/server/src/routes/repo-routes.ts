@@ -1,7 +1,6 @@
 import { Transaction } from "@mysten/sui/transactions";
 import type { FastifyInstance } from "fastify";
 import { parseDelegateAuth, type AuthContext } from "../auth.js";
-import type { BlobView, TreeEntry } from "../indexer.js";
 import { httpError } from "../lib/http-error.js";
 import {
   accessAction,
@@ -16,46 +15,8 @@ import {
   requestBodyRecord,
   requestOrigin
 } from "../lib/request-helpers.js";
-import { webViewerFromRequest } from "../plugins/auth-context.js";
-import type { Repositories } from "../repositories/index.js";
 import { toRepoListItem } from "@ducnmm/octopus-shared";
-import {
-  renderBlobPage,
-  renderCommitsPage,
-  renderCreateRepoPage,
-  renderDashboardPage,
-  renderLandingPage,
-  renderProfilePage,
-  renderRepoAccessPage,
-  renderRepoActivityPage,
-  renderRepoPage
-} from "@octopus/web/views/pages.js";
 import type { RouteDeps } from "./index.js";
-
-const readReadmePreview = async (
-  repos: Repositories,
-  repoPath: string,
-  path: string,
-  ref: string,
-  tree: TreeEntry[]
-): Promise<BlobView | null> => {
-  if (path) {
-    return null;
-  }
-
-  const readme = tree.find(
-    (entry) => entry.type === "blob" && !entry.path.includes("/") && /^readme(?:\..*)?$/i.test(entry.path)
-  );
-  if (!readme) {
-    return null;
-  }
-
-  try {
-    return await repos.index.blob(repoPath, ref, readme.path);
-  } catch {
-    return null;
-  }
-};
 
 export const repoRoutes = async (app: FastifyInstance, deps: RouteDeps) => {
   const { config, repositories: repos, services, ctx } = deps;
@@ -180,73 +141,8 @@ export const repoRoutes = async (app: FastifyInstance, deps: RouteDeps) => {
     }
   );
 
-  app.get<{ Params: { owner: string; repo: string } }>("/:owner/:repo/settings/access", async (request, reply) => {
-    const state = await ctx.authorizedHtmlRepoState(request, reply);
-    if (!state) {
-      return;
-    }
-
-    const auth = await ctx.requestAuthContext(request);
-    if (!auth) {
-      throw httpError("Sign in before managing contributors", 401);
-    }
-    if (!repos.sui.canManageAccess(state, auth)) {
-      throw httpError("Only the repository owner can manage contributors", 403);
-    }
-
-    await reply.type("text/html; charset=utf-8").send(
-      renderRepoAccessPage({
-        repo: await services.repoService.listItemWithCounts(state),
-        viewer: webViewerFromRequest(request) ?? { walletAddress: auth.walletAddress }
-      })
-    );
-  });
-
-  app.get<{ Params: { owner: string; repo: string } }>("/:owner/:repo/activity", async (request, reply) => {
-    const state = await ctx.authorizedHtmlRepoContentState(request, reply);
-    if (!state) {
-      return;
-    }
-
-    const activity = await repos.activity.list(state);
-    await reply.type("text/html; charset=utf-8").send(
-      renderRepoActivityPage({
-        repo: await services.repoService.listItemWithCounts(state, { activity }),
-        activity,
-        viewer: webViewerFromRequest(request)
-      })
-    );
-  });
-
-  app.get("/", async (request, reply) => {
-    const viewer = webViewerFromRequest(request);
-    if (!viewer) {
-      await reply
-        .type("text/html; charset=utf-8")
-        .send(renderLandingPage({ loginHref: ctx.webLoginUrl(request, "/") }));
-      return;
-    }
-
-    const repoItems = await ctx.visibleRepoItems(request);
-    await reply.type("text/html; charset=utf-8").send(renderDashboardPage(repoItems, viewer));
-  });
-
-  app.get("/new", async (request, reply) => {
-    const viewer = webViewerFromRequest(request);
-    await reply
-      .type("text/html; charset=utf-8")
-      .send(renderCreateRepoPage({ viewer, loginHref: ctx.webLoginUrl(request, "/new") }));
-  });
-
   app.get("/v1/repos", async (request) => {
     return { repos: await ctx.visibleRepoItems(request) };
-  });
-
-  app.get<{ Params: { owner: string } }>("/:owner", async (request, reply) => {
-    const repoItems = (await ctx.visibleRepoItems(request)).filter((repo) => repo.owner === request.params.owner);
-    await reply
-      .type("text/html; charset=utf-8")
-      .send(renderProfilePage(request.params.owner, repoItems, webViewerFromRequest(request)));
   });
 
   app.get<{ Params: { owner: string; repo: string } }>("/v1/repos/:owner/:repo", async (request) => {
@@ -393,116 +289,4 @@ export const repoRoutes = async (app: FastifyInstance, deps: RouteDeps) => {
 
     return { manifests: await repos.manifests.read(request.params.owner, request.params.repo) };
   });
-
-  app.get<{ Params: { owner: string; repo: string }; Querystring: { ref?: string; path?: string } }>(
-    "/:owner/:repo",
-    async (request, reply) => {
-      const state = await ctx.authorizedHtmlRepoContentState(request, reply);
-      if (!state) {
-        return;
-      }
-      const index = await repos.index.ensure(state);
-      const ref = queryString(request.query.ref) ?? state.defaultBranch;
-      const path = request.query.path ?? "";
-      const repoPath = repos.git.path(state.owner, state.repo);
-      const tree = await repos.index.tree(repoPath, ref, path);
-      const commits = await repos.index.commits(repoPath, ref, 25);
-      await reply.type("text/html; charset=utf-8").send(
-        renderRepoPage({
-          repo: await services.repoService.listItemWithCounts(state, { index }),
-          index,
-          commits,
-          tree,
-          readme: await readReadmePreview(repos, repoPath, path, ref, tree),
-          ref,
-          path,
-          commitActors: await repos.commitActors.read(state, repoPath),
-          origin: requestOrigin(request),
-          viewer: webViewerFromRequest(request)
-        })
-      );
-    }
-  );
-
-  app.get<{ Params: { owner: string; repo: string }; Querystring: { ref?: string; limit?: string } }>(
-    "/:owner/:repo/commits",
-    async (request, reply) => {
-      const state = await ctx.authorizedHtmlRepoContentState(request, reply);
-      if (!state) {
-        return;
-      }
-      const index = await repos.index.ensure(state);
-      const ref = queryString(request.query.ref) ?? state.defaultBranch;
-      const limit = Math.max(1, Math.min(queryInt(request.query.limit, 100), 500));
-      const repoPath = repos.git.path(state.owner, state.repo);
-      const commits = await repos.index.commits(repoPath, ref, limit);
-      await reply.type("text/html; charset=utf-8").send(
-        renderCommitsPage({
-          repo: await services.repoService.listItemWithCounts(state, { index }),
-          index,
-          commits,
-          ref,
-          commitActors: await repos.commitActors.read(state, repoPath),
-          viewer: webViewerFromRequest(request)
-        })
-      );
-    }
-  );
-
-  app.get<{ Params: { owner: string; repo: string }; Querystring: { ref?: string; path?: string } }>(
-    "/:owner/:repo/tree",
-    async (request, reply) => {
-      const state = await ctx.authorizedHtmlRepoContentState(request, reply);
-      if (!state) {
-        return;
-      }
-      const index = await repos.index.ensure(state);
-      const ref = queryString(request.query.ref) ?? state.defaultBranch;
-      const path = request.query.path ?? "";
-      const repoPath = repos.git.path(state.owner, state.repo);
-      const tree = await repos.index.tree(repoPath, ref, path);
-      const commits = await repos.index.commits(repoPath, ref, 25);
-      await reply.type("text/html; charset=utf-8").send(
-        renderRepoPage({
-          repo: await services.repoService.listItemWithCounts(state, { index }),
-          index,
-          commits,
-          tree,
-          readme: await readReadmePreview(repos, repoPath, path, ref, tree),
-          ref,
-          path,
-          commitActors: await repos.commitActors.read(state, repoPath),
-          origin: requestOrigin(request),
-          viewer: webViewerFromRequest(request)
-        })
-      );
-    }
-  );
-
-  app.get<{ Params: { owner: string; repo: string }; Querystring: { ref?: string; path?: string } }>(
-    "/:owner/:repo/blob",
-    async (request, reply) => {
-      const state = await ctx.authorizedHtmlRepoContentState(request, reply);
-      if (!state) {
-        return;
-      }
-      const index = await repos.index.ensure(state);
-      const ref = queryString(request.query.ref) ?? state.defaultBranch;
-      const path = queryString(request.query.path);
-      if (!path) {
-        throw httpError("File path is required", 400);
-      }
-      const repoPath = repos.git.path(state.owner, state.repo);
-      await reply.type("text/html; charset=utf-8").send(
-        renderBlobPage({
-          repo: await services.repoService.listItemWithCounts(state, { index }),
-          index,
-          commits: await repos.index.commits(repoPath, ref, 25),
-          ref,
-          file: await repos.index.blob(repoPath, ref, path),
-          viewer: webViewerFromRequest(request)
-        })
-      );
-    }
-  );
 };
