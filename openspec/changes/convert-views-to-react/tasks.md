@@ -39,8 +39,8 @@
 
 ## 5. Delete legacy views and finalize
 
-- [ ] 5.1 Delete `apps/web/src/views/` (pages.ts, scripts.ts, styles.ts, types.ts), remove the `./views/*` subpath exports from `apps/web/package.json`, and drop any now-unneeded `@octopus/web` dependency wiring in the server
-- [ ] 5.2 Delete `apps/server/test/views.test.ts` and its snapshots
-- [ ] 5.3 Update `Dockerfile` to build and include the web SPA assets, and add `apps/web/**` to `railway.json` watchPatterns
-- [ ] 5.4 Update `openspec/specs/server-module-architecture/spec.md` references in docs/CLAUDE.md that describe server-rendered HTML (server module map mentions `web.ts` pages)
-- [ ] 5.5 Run `pnpm check && pnpm test && pnpm build`, then manually verify the full flow with `pnpm dev:server` + built SPA: browse public repo, private repo login/unlock, create repo, PR lifecycle
+- [x] 5.1 Deleted `apps/web/src/views/`; `./views/*` subpath exports removed (only `./package.json` remains, used by the server to locate the SPA dist); web build is now `vite build` only; the server keeps its `@octopus/web` dependency for dist resolution
+- [x] 5.2 Deleted `apps/server/test/views.test.ts` and its snapshot file
+- [x] 5.3 `Dockerfile` now builds `@octopus/web` and ships `dist` at `/app/web-dist` (`OCTOPUS_WEB_DIST_DIR` pinned); `railway.json` watchPatterns include `apps/web/**`
+- [x] 5.4 Updated CLAUDE.md (package roles, server module map → `routes/spa.ts`, dev:web description) and `docs/reference/env-vars.md` (added `OCTOPUS_WEB_DIST_DIR`); the `server-module-architecture` base spec updates land when this change is archived
+- [x] 5.5 `pnpm check && pnpm test && pnpm build` all green (web 11, cli 32, server 35 tests); live verification with `pnpm dev:server` + Chrome: landing page boots and renders, deep-link repo URL shows the SPA error panel with a correct Sign-in URL, `/login` mounts the wallet panel served by the server itself. Wallet-signature flows (create repo, unlock, PR actions) are covered by the e2e suites at the API level

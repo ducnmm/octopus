@@ -42,7 +42,8 @@ cp .env.example .env
 | `OCTOPUS_PORT` | `48787` | Preferred local server port. |
 | `PORT` | `48787` when `OCTOPUS_PORT` is absent | Hosting platform port fallback. |
 | `OCTOPUS_DATA_DIR` | `./data` | Server data root. |
-| `OCTOPUS_WEB_URL` | `http://127.0.0.1:45173` | Wallet login app URL advertised by `/v1/auth/config`. |
+| `OCTOPUS_WEB_URL` | `http://127.0.0.1:45173` | Web app origin allowed for credentialed CORS (dev) and advertised by `/v1/auth/config`. |
+| `OCTOPUS_WEB_DIST_DIR` | Resolved from the `@octopus/web` package | Directory of the built web SPA the server serves (assets + `index.html` fallback). |
 | `DATABASE_URL` | Empty | Optional Postgres URL for scaffolded DB-backed paths. |
 | `OCTOPUS_WEB_SESSION_SECRET` | Deterministic hash of data dir | Use a real stable secret in production. |
 | `OCTOPUS_DELEGATE_CACHE_TTL_MS` | `60000` | Server-side delegate verification cache TTL. |

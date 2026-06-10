@@ -14,9 +14,11 @@ RUN pnpm install --frozen-lockfile
 
 COPY tsconfig.base.json ./
 COPY packages/shared ./packages/shared
+COPY apps/web ./apps/web
 COPY apps/server ./apps/server
 
 RUN pnpm --filter @ducnmm/octopus-shared build \
+    && pnpm --filter @octopus/web build \
     && pnpm --filter @octopus/server build \
     && pnpm --filter @octopus/server deploy --prod /app/runtime
 
@@ -33,6 +35,9 @@ ENV OCTOPUS_DATA_DIR=/data
 WORKDIR /app
 
 COPY --from=build /app/runtime ./
+# Built web SPA, served by the server (hashed assets + index.html fallback).
+COPY --from=build /app/apps/web/dist ./web-dist
+ENV OCTOPUS_WEB_DIST_DIR=/app/web-dist
 
 EXPOSE 48787
 

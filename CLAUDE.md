@@ -21,7 +21,7 @@ pnpm build                  # build all workspaces
 pnpm test                   # run all vitest suites (builds shared first)
 
 pnpm dev:server             # local server on http://127.0.0.1:48787
-pnpm dev:web                # wallet login/unlock Vite app on :45173
+pnpm dev:web                # web SPA (full UI + wallet login/unlock) on :45173
 pnpm dev:docs               # fumadocs site on :3004
 pnpm octopus <args>         # run the CLI from source against built shared
 
@@ -52,9 +52,9 @@ extensions in relative imports**.
 
 | Path | Package | Role |
 |---|---|---|
-| `apps/server` | `@octopus/server` | Fastify Git HTTP + REST API + server-rendered HTML UI, auth, artifacts, restore, indexing. The core. |
+| `apps/server` | `@octopus/server` | Fastify Git HTTP + `/v1` JSON API + static SPA serving, auth, artifacts, restore, indexing. No HTML rendering. The core. |
 | `apps/cli` | `@ducnmm/octopus` | Published CLI (`octopus`). Wallet login, delegate tokens, repo create/connect, restore, PRs. |
-| `apps/web` | `@octopus/web` | React 19 + Vite wallet approval / session login+unlock flow. |
+| `apps/web` | `@octopus/web` | React 19 + Vite SPA: the entire web UI (repos, commits, blobs, PRs, activity, access) plus the wallet login/unlock panels. Built bundle is served by the server. |
 | `apps/docs` | `@octopus/docs` | Next.js + fumadocs documentation site. |
 | `apps/indexer` | — | Empty scaffold (hosted indexer worker not yet implemented). |
 | `packages/shared` | `@ducnmm/octopus-shared` | Zod request schemas, auth header names, delegate-token message format. The contract between CLI/server/web. |
@@ -62,10 +62,10 @@ extensions in relative imports**.
 
 ### Server module map (`apps/server/src`)
 
-`index.ts` → `loadConfig()` → `buildServer(config)`. `server.ts` (~1800 lines)
-wires all routes. Subsystems are split out:
+`index.ts` → `loadConfig()` → `buildServer(config)` (`app.ts`), which registers
+per-domain route plugins from `routes/`. Subsystems are split out:
 
-- `config.ts` — all env-var parsing into one `ServerConfig`. Start here to
+- `config/env.ts` — all env-var parsing into one `ServerConfig`. Start here to
   understand runtime modes.
 - `auth.ts` — delegate-key verification, signed `x-octopus-auth-token` parsing.
 - `git.ts` — Git smart-HTTP, bare repo cache under `data/repos`.
@@ -75,7 +75,10 @@ wires all routes. Subsystems are split out:
 - `seal.ts` — private-artifact encryption (local deterministic vs SEAL).
 - `enoki.ts` — optional sponsored-transaction support.
 - `indexer.ts` / `repo-activity.ts` / `commit-actors.ts` — disposable file/commit/contribution index.
-- `web.ts` (~5500 lines) — every server-rendered HTML page.
+- `routes/spa.ts` — serves the built `@octopus/web` SPA bundle with an
+  `index.html` history fallback (override location via `OCTOPUS_WEB_DIST_DIR`).
+  The server renders no HTML itself; auth failures surface as structured JSON
+  codes (`login_required` / `repo_locked`) the SPA turns into wallet flows.
 - `pull-requests.ts`, `namespace.ts`, `push-attempts.ts`.
 
 ### Runtime modes (driven by env, parsed in `config.ts`)

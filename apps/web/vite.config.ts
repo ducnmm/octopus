@@ -13,6 +13,9 @@ export default defineConfig({
       "@": resolve(here, "src")
     }
   },
+  test: {
+    include: ["src/**/*.test.{ts,tsx}"]
+  },
   build: {
     rollupOptions: {
       output: {
