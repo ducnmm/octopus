@@ -46,6 +46,7 @@ cp .env.example .env
 | `DATABASE_URL` | Empty | Optional Postgres URL for scaffolded DB-backed paths. |
 | `OCTOPUS_WEB_SESSION_SECRET` | Deterministic hash of data dir | Use a real stable secret in production. |
 | `OCTOPUS_DELEGATE_CACHE_TTL_MS` | `60000` | Server-side delegate verification cache TTL. |
+| `OCTOPUS_AGENTATION_ENDPOINT` | Empty | Dev only. When set (e.g. `http://localhost:4747`), injects the Agentation feedback toolbar into server-rendered HTML pages. Leave unset in production. |
 | `OCTOPUS_BUILD_SHA` | Empty | Optional build metadata in server responses. |
 | `OCTOPUS_INDEX_TREE_LIMIT` | `5000` | Max indexed tree entries before truncation. |
 | `OCTOPUS_BLOB_VIEW_LIMIT_BYTES` | `1048576` | Max blob bytes shown by file viewer/API. |

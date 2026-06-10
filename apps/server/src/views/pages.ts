@@ -2169,6 +2169,32 @@ ${authPopupScript}
 </html>`;
 };
 
+const renderRepositorySetupGuide = (remoteUrl: string): string => {
+  return `<section class="repo-setup-guide">
+    <div class="setup-section">
+      <h2 class="setup-heading">Create a new repository on the command line</h2>
+      <div class="setup-commands">
+<pre><code>git init
+git add .
+git commit -m "first commit"
+git branch -M main
+git remote add origin ${escapeHtml(remoteUrl)}
+git push -u origin main</code></pre>
+        <button class="clone-copy-button" type="button" title="Copy commands" aria-label="Copy commands" data-copy-text="${escapeAttr(`git init\ngit add .\ngit commit -m "first commit"\ngit branch -M main\ngit remote add origin ${remoteUrl}\ngit push -u origin main`)}">${copyIcon}</button>
+      </div>
+    </div>
+    <div class="setup-section">
+      <h2 class="setup-heading">Push an existing repository from the command line</h2>
+      <div class="setup-commands">
+<pre><code>git remote add origin ${escapeHtml(remoteUrl)}
+git branch -M main
+git push -u origin main</code></pre>
+        <button class="clone-copy-button" type="button" title="Copy commands" aria-label="Copy commands" data-copy-text="${escapeAttr(`git remote add origin ${remoteUrl}\ngit branch -M main\ngit push -u origin main`)}">${copyIcon}</button>
+      </div>
+    </div>
+  </section>`;
+};
+
 export const renderRepoPage = (input: {
   repo: RepoListItem;
   index: RepoIndex;
@@ -2253,7 +2279,10 @@ ${topNavigation(input.viewer)}
             </div>
             ${indexNotice}
           </section>
-          <section class="table-wrap">
+          ${
+            input.commits.length === 0 && input.path === ""
+              ? renderRepositorySetupGuide(remoteUrl)
+              : `<section class="table-wrap">
             <table class="compact file-table file-browser-table">
               <colgroup>
                 <col style="width: 40%">
@@ -2265,7 +2294,8 @@ ${topNavigation(input.viewer)}
                 ${treeRows}
               </tbody>
             </table>
-          </section>
+          </section>`
+          }
           ${readmePanel}
         </div>
         ${aboutPanel}

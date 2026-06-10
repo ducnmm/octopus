@@ -2830,6 +2830,53 @@ export const pageStyles = `
           min-height: 56px;
         }
       }
+
+      .repo-setup-guide {
+        padding: 24px;
+        background: var(--color-canvas-subtle);
+        border: 1px solid var(--color-border-default);
+        border-radius: 6px;
+        margin-top: 24px;
+        color: var(--color-fg-default);
+      }
+
+      .setup-section {
+        margin-bottom: 24px;
+      }
+
+      .setup-section:last-child {
+        margin-bottom: 0;
+      }
+
+      .setup-heading {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0 0 16px;
+      }
+
+      .setup-commands {
+        position: relative;
+        background: var(--color-canvas-default);
+        border: 1px solid var(--color-border-default);
+        border-radius: 6px;
+      }
+
+      .setup-commands pre {
+        margin: 0;
+        padding: 16px;
+        overflow-x: auto;
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre;
+      }
+
+      .setup-commands .clone-copy-button {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        background: var(--color-canvas-default);
+      }
 `;
 
 export const faviconLinks = `

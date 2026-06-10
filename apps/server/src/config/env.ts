@@ -112,6 +112,7 @@ const serverConfigSchema = z
     sealThreshold: z.number().int().positive().optional(),
     webSessionSecret: z.string().min(1),
     delegateCacheTtlMs: z.number().int().min(0),
+    agentationEndpoint: urlString.optional(),
     enokiPrivateApiKey: z.string().min(1).optional(),
     enokiApiUrl: urlString.optional(),
     buildSha: z.string().min(1).optional(),
@@ -161,6 +162,7 @@ export const loadConfig = (): ServerConfig => {
     sealThreshold: process.env.SEAL_THRESHOLD ? envInt(process.env.SEAL_THRESHOLD, 1) : undefined,
     webSessionSecret: process.env.OCTOPUS_WEB_SESSION_SECRET || defaultWebSessionSecret(dataDir),
     delegateCacheTtlMs: envInt(process.env.OCTOPUS_DELEGATE_CACHE_TTL_MS, 60_000),
+    agentationEndpoint: process.env.OCTOPUS_AGENTATION_ENDPOINT || undefined,
     enokiPrivateApiKey:
       process.env.ENOKI_PRIVATE_API_KEY ||
       process.env.OCTOPUS_ENOKI_PRIVATE_API_KEY ||
