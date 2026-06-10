@@ -30,15 +30,12 @@ export const pullRequestRoutes = async (app: FastifyInstance, deps: RouteDeps) =
     return auth;
   };
 
-  app.get<RepoParams & { Querystring: { status?: string } }>(
-    "/v1/repos/:owner/:repo/pulls",
-    async (request) => {
-      const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
-      ctx.requireRepoContentAccess(request, state);
-      const status = pullRequestStatusFilter(request.query.status, "all");
-      return { pullRequests: await services.pullRequestService.list(state.owner, state.repo, status) };
-    }
-  );
+  app.get<RepoParams & { Querystring: { status?: string } }>("/v1/repos/:owner/:repo/pulls", async (request) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    ctx.requireRepoContentAccess(request, state);
+    const status = pullRequestStatusFilter(request.query.status, "all");
+    return { pullRequests: await services.pullRequestService.list(state.owner, state.repo, status) };
+  });
 
   app.post<RepoParams>("/v1/repos/:owner/:repo/pulls", async (request, reply) => {
     const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
@@ -71,7 +68,9 @@ export const pullRequestRoutes = async (app: FastifyInstance, deps: RouteDeps) =
     const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
     ctx.requireRepoContentAccess(request, state);
     const auth = await requireAuthContext(request, "Authentication is required to close a pull request");
-    return { pullRequest: await services.pullRequestService.close(state, pullRequestNumber(request.params.pull), auth) };
+    return {
+      pullRequest: await services.pullRequestService.close(state, pullRequestNumber(request.params.pull), auth)
+    };
   });
 
   app.post<PullParams>("/v1/repos/:owner/:repo/pulls/:pull/reopen", async (request) => {
@@ -212,7 +211,10 @@ export const pullRequestRoutes = async (app: FastifyInstance, deps: RouteDeps) =
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
       }
-      await reply.code(303).header("location", pullRequestPagePath(state, pull, error)).send();
+      await reply
+        .code(303)
+        .header("location", pullRequestPagePath(state, pull, error))
+        .send();
     };
   };
 

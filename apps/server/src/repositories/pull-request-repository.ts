@@ -32,8 +32,11 @@ export const createPullRequestRepository = (config: ServerConfig) => ({
     state: Parameters<typeof assessPullRequestMergeability>[1],
     pullRequest: Parameters<typeof assessPullRequestMergeability>[2]
   ) => assessPullRequestMergeability(config, state, pullRequest),
-  close: (state: Parameters<typeof closePullRequest>[1], number: number, auth: Parameters<typeof closePullRequest>[3]) =>
-    closePullRequest(config, state, number, auth),
+  close: (
+    state: Parameters<typeof closePullRequest>[1],
+    number: number,
+    auth: Parameters<typeof closePullRequest>[3]
+  ) => closePullRequest(config, state, number, auth),
   reopen: (
     state: Parameters<typeof reopenPullRequest>[1],
     number: number,
@@ -51,8 +54,7 @@ export const createPullRequestRepository = (config: ServerConfig) => ({
     body: string,
     auth: Parameters<typeof addPullRequestComment>[4]
   ) => addPullRequestComment(config, state, number, body, auth),
-  listComments: (owner: string, repo: string, number: number) =>
-    listPullRequestComments(config, owner, repo, number)
+  listComments: (owner: string, repo: string, number: number) => listPullRequestComments(config, owner, repo, number)
 });
 
 export type PullRequestRepository = ReturnType<typeof createPullRequestRepository>;

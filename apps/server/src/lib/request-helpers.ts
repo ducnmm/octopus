@@ -136,10 +136,11 @@ export const pullRequestCommentInput = (body: unknown) => {
   }
 };
 
-export const pullRequestStatusFilter = (value: unknown, fallback: "open" | "all"): "open" | "closed" | "merged" | "all" => {
-  return value === "open" || value === "closed" || value === "merged" || value === "all"
-    ? value
-    : fallback;
+export const pullRequestStatusFilter = (
+  value: unknown,
+  fallback: "open" | "all"
+): "open" | "closed" | "merged" | "all" => {
+  return value === "open" || value === "closed" || value === "merged" || value === "all" ? value : fallback;
 };
 
 export const createRepoInput = (body: unknown) => {

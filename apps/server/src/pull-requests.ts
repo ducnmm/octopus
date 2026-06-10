@@ -212,8 +212,7 @@ const normalizeComment = (value: unknown): PullRequestComment | null => {
 // Tolerates store files written before the lifecycle fields existed: missing
 // comments become an empty list and unknown statuses fall back to "open".
 const normalizePullRequest = (value: PullRequest): PullRequest => {
-  const status: PullRequestStatus =
-    value.status === "closed" || value.status === "merged" ? value.status : "open";
+  const status: PullRequestStatus = value.status === "closed" || value.status === "merged" ? value.status : "open";
   const comments = Array.isArray(value.comments)
     ? value.comments.map(normalizeComment).filter((comment): comment is PullRequestComment => comment !== null)
     : [];
@@ -510,7 +509,9 @@ const requireAuth = (auth: AuthContext | null, action: string): AuthContext => {
 };
 
 const isAncestor = async (repoPath: string, ancestor: string, descendant: string): Promise<boolean> => {
-  return (await runGitWithCode(["--git-dir", repoPath, "merge-base", "--is-ancestor", ancestor, descendant])).code === 0;
+  return (
+    (await runGitWithCode(["--git-dir", repoPath, "merge-base", "--is-ancestor", ancestor, descendant])).code === 0
+  );
 };
 
 /**
@@ -662,9 +663,7 @@ export const listPullRequestComments = async (
   number: number
 ): Promise<PullRequestComment[]> => {
   const store = await readStore(config, owner, repo);
-  return [...findPullRequest(store, number).comments].sort(
-    (a, b) => a.createdAtMs - b.createdAtMs || a.id - b.id
-  );
+  return [...findPullRequest(store, number).comments].sort((a, b) => a.createdAtMs - b.createdAtMs || a.id - b.id);
 };
 
 // `git merge-tree --write-tree` exits 0 with the merged tree OID on the first
@@ -739,12 +738,10 @@ const createMergeCommit = async (input: {
   const message =
     strategy === "squash"
       ? [`${pullRequest.title} (#${pullRequest.number})`, pullRequest.body].filter(Boolean).join("\n\n")
-      : [
-          `Merge pull request #${pullRequest.number} from ${shortRef(pullRequest.headRef)}`,
-          pullRequest.title
-        ].join("\n\n");
-  const parents =
-    strategy === "squash" ? ["-p", baseCommit] : ["-p", baseCommit, "-p", headCommit];
+      : [`Merge pull request #${pullRequest.number} from ${shortRef(pullRequest.headRef)}`, pullRequest.title].join(
+          "\n\n"
+        );
+  const parents = strategy === "squash" ? ["-p", baseCommit] : ["-p", baseCommit, "-p", headCommit];
   const result = await runGit(
     ["--git-dir", repoPath, "commit-tree", treeOid, ...parents, "-m", message],
     mergeActorEnv(actor)
@@ -763,7 +760,9 @@ const branchDeleteEligibility = (
 
   const dependent = store.pullRequests.find(
     (candidate) =>
-      candidate.status === "open" && candidate.number !== pullRequest.number && candidate.baseRef === pullRequest.headRef
+      candidate.status === "open" &&
+      candidate.number !== pullRequest.number &&
+      candidate.baseRef === pullRequest.headRef
   );
   return dependent ? `Pull request #${dependent.number} targets this branch as base` : null;
 };
