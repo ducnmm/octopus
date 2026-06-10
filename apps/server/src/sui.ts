@@ -334,6 +334,10 @@ const createTestnetRepo = async (
     throw new Error(`Sui create_repo failed: ${error}`);
   }
 
+  // Wait until the fullnode has indexed the transaction so the registry lookup
+  // on the very next request (e.g. the post-create redirect) can see the repo.
+  await client.waitForTransaction({ digest: result.digest });
+
   const repoObject = result.objectChanges?.find(
     (change: { type: string; objectType?: string; objectId?: string }) =>
       change.type === "created" && "objectType" in change && String(change.objectType).endsWith("::registry::Repo")
@@ -769,7 +773,12 @@ const readTestnetRepoState = async (
   }
 
   const client = testnetClient(config);
-  const repoObjectId = await resolveTestnetRepoObjectId(config, client, owner, repo);
+  // The registry's dynamic-field index can lag a freshly executed create_repo;
+  // fall back to the repo object id recorded in the local mirror at creation.
+  const mirroredObjectId = (await readRepoStateFile(config, owner, repo))?.repoObjectId;
+  const repoObjectId =
+    (await resolveTestnetRepoObjectId(config, client, owner, repo)) ??
+    (mirroredObjectId?.startsWith("0x") ? mirroredObjectId : null);
   if (!repoObjectId) {
     return null;
   }
@@ -778,7 +787,10 @@ const readTestnetRepoState = async (
     id: repoObjectId,
     options: { showContent: true }
   });
-  const fields = moveFields(object.data?.content);
+  if (!object.data) {
+    return null;
+  }
+  const fields = moveFields(object.data.content);
   const repoId = asString(fields.repo_id) || `${owner}/${repo}`;
   const visibility = visibilityFromCode(fields.visibility);
   const refsTableId = tableId(fields.refs);
