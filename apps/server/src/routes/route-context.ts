@@ -13,7 +13,7 @@ import {
 import type { Repositories } from "../repositories/index.js";
 import type { Services } from "../services/index.js";
 import type { SuiRepoState } from "../sui.js";
-import { renderPrivateRepoLoginPage, renderPrivateRepoUnlockPage, toRepoListItem } from "../views/pages.js";
+import { renderPrivateRepoLoginPage, renderPrivateRepoUnlockPage, toRepoListItem } from "@octopus/web/views/pages.js";
 
 const statusCodeOf = (error: unknown): number =>
   typeof (error as Error & { statusCode?: unknown }).statusCode === "number"

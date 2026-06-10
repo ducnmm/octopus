@@ -13,7 +13,7 @@ import {
 } from "../lib/request-helpers.js";
 import { webViewerFromRequest } from "../plugins/auth-context.js";
 import type { SuiRepoState } from "../sui.js";
-import { renderPullRequestCreatePage, renderPullRequestListPage, renderPullRequestPage } from "../views/pages.js";
+import { renderPullRequestCreatePage, renderPullRequestListPage, renderPullRequestPage } from "@octopus/web/views/pages.js";
 import type { RouteDeps } from "./index.js";
 
 type PullParams = { Params: { owner: string; repo: string; pull: string } };

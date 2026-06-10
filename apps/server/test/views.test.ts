@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderCreateRepoPage, renderLandingPage } from "../src/views/pages.js";
+import { renderCreateRepoPage, renderLandingPage } from "@octopus/web/views/pages.js";
 
 // Snapshot guards for the views layer: these key pages are deterministic and
 // catch unintended HTML drift after the web.ts -> views/ decomposition.

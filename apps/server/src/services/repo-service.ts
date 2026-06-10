@@ -5,7 +5,7 @@ import { httpError } from "../lib/http-error.js";
 import { resolveRepoOwnerNamespace } from "../namespace.js";
 import type { Repositories } from "../repositories/index.js";
 import type { SuiRepoState } from "../sui.js";
-import { toRepoListItem } from "../views/pages.js";
+import { toRepoListItem } from "@octopus/web/views/pages.js";
 
 type RepoIndex = Awaited<ReturnType<Repositories["index"]["ensure"]>>;
 type PullRequestList = Awaited<ReturnType<Repositories["pullRequests"]["list"]>>;

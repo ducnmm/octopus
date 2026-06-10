@@ -29,7 +29,7 @@ import {
   renderRepoActivityPage,
   renderRepoPage,
   toRepoListItem
-} from "../views/pages.js";
+} from "@octopus/web/views/pages.js";
 import type { RouteDeps } from "./index.js";
 
 const readReadmePreview = async (

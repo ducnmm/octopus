@@ -3,8 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./views/pages.js": {
+      "types": "./dist/views/pages.d.ts",
+      "import": "./dist/views/pages.js"
+    },
+    "./views/types.js": {
+      "types": "./dist/views/types.d.ts",
+      "import": "./dist/views/types.js"
+    },
+    "./views/scripts.js": {
+      "types": "./dist/views/scripts.d.ts",
+      "import": "./dist/views/scripts.js"
+    },
+    "./views/styles.js": {
+      "types": "./dist/views/styles.d.ts",
+      "import": "./dist/views/styles.js"
+    }
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json && vite build",
+    "build": "vite build && tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "dev": "vite --host 127.0.0.1 --port 45173",
     "test": "vitest run"

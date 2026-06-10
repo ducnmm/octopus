@@ -1,12 +1,16 @@
-import type { SuiRepoState } from "../sui.js";
-import type { BlobView, IndexedCommit, RepoIndex, TreeEntry } from "../indexer.js";
 import type {
+  SuiRepoState,
+  BlobView,
+  IndexedCommit,
+  RepoIndex,
+  TreeEntry,
   PullRequest,
   PullRequestComparison,
   PullRequestMergeability,
-  PullRequestStatusFilter
-} from "../pull-requests.js";
-import type { RepoActivityItem, RepoActivityProof } from "../repo-activity.js";
+  PullRequestStatusFilter,
+  RepoActivityItem,
+  RepoActivityProof
+} from "./types.js";
 import { faviconLinks, pageStyles } from "./styles.js";
 import { authPopupScript } from "./scripts.js";
 

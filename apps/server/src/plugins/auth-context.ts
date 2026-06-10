@@ -4,7 +4,7 @@ import fp from "fastify-plugin";
 import type { ServerConfig } from "../config/env.js";
 import type { WebAuthStore } from "../lib/web-auth-store.js";
 import { decodeWebSessionCookie, parseCookies, webSessionCookieName, type WebSession } from "../lib/web-session.js";
-import type { WebViewer } from "../views/pages.js";
+import type { WebViewer } from "@octopus/web/views/pages.js";
 
 export const hasDelegateAuth = (request: { headers: Record<string, unknown> }): boolean => {
   return Boolean(
