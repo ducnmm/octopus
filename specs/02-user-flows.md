@@ -51,6 +51,40 @@ Flow:
 7. Server submits a Sui transaction to update the ref and write the manifest.
 8. Server indexes metadata for web UI and search.
 
+## Pull Requests
+
+```bash
+octopus pr create ducnmm/my-repo --head feature --title "Add feature"
+octopus pr list ducnmm/my-repo --status open
+octopus pr view ducnmm/my-repo 1
+octopus pr comment ducnmm/my-repo 1 --body "Looks good"
+octopus pr merge ducnmm/my-repo 1 --strategy squash --delete-branch
+octopus pr close ducnmm/my-repo 1
+octopus pr reopen ducnmm/my-repo 1
+```
+
+Lifecycle: `open → merged` (terminal) via merge, `open ↔ closed` via close/reopen.
+The same operations are available on the web PR pages and the REST API
+(`/v1/repos/:owner/:repo/pulls/...`).
+
+Merge flow:
+
+1. Client fetches the PR; the response includes live head/base commits and a
+   mergeability (conflict) assessment.
+2. Client submits the merge with a strategy (`merge`, `squash`, `fast-forward`)
+   and the reviewed `expectedHeadCommit`.
+3. Server re-resolves the branches; a moved head or changed base yields 409.
+4. Server builds the merged commit with `git merge-tree`/`commit-tree` (no
+   working tree) and updates the base ref with a compare-and-swap.
+5. Server finalizes the ref change through the same pipeline as a push:
+   bundle artifact → Walrus upload → Sui ref manifest. On failure the cache
+   refs roll back and the PR stays open.
+6. The PR record becomes `merged` with the merge commit, strategy, actor, and
+   timestamp; optional head-branch deletion cleans up the cache ref.
+
+Authorization: merge requires repository write access; close, reopen, and
+comment are allowed to the PR author or any writer.
+
 ## Clone
 
 ```bash

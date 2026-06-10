@@ -1,4 +1,9 @@
-import { createPullRequestRequestSchema, createRepoRequestSchema } from "@ducnmm/octopus-shared";
+import {
+  createPullRequestCommentRequestSchema,
+  createPullRequestRequestSchema,
+  createRepoRequestSchema,
+  mergePullRequestRequestSchema
+} from "@ducnmm/octopus-shared";
 import type { SuiRepoAccessAction, SuiRepoAccessRole } from "../sui.js";
 import { httpError } from "./http-error.js";
 import { isRecord } from "./web-session.js";
@@ -105,6 +110,36 @@ export const createPullRequestInput = (body: unknown) => {
   } catch (error) {
     throw httpError(error instanceof Error ? error.message : "Invalid pull request input", 400);
   }
+};
+
+// Unlike requestBodyRecord this keeps non-string values (JSON booleans).
+const looseBodyRecord = (body: unknown): Record<string, unknown> => {
+  if (typeof body === "string") {
+    return Object.fromEntries(new URLSearchParams(body).entries());
+  }
+  return isRecord(body) ? body : {};
+};
+
+export const mergePullRequestInput = (body: unknown) => {
+  try {
+    return mergePullRequestRequestSchema.parse(looseBodyRecord(body));
+  } catch (error) {
+    throw httpError(error instanceof Error ? error.message : "Invalid merge input", 400);
+  }
+};
+
+export const pullRequestCommentInput = (body: unknown) => {
+  try {
+    return createPullRequestCommentRequestSchema.parse(looseBodyRecord(body));
+  } catch {
+    throw httpError("Comment body must be between 1 and 10,000 characters", 400);
+  }
+};
+
+export const pullRequestStatusFilter = (value: unknown, fallback: "open" | "all"): "open" | "closed" | "merged" | "all" => {
+  return value === "open" || value === "closed" || value === "merged" || value === "all"
+    ? value
+    : fallback;
 };
 
 export const createRepoInput = (body: unknown) => {

@@ -1,6 +1,11 @@
 import type { SuiRepoState } from "../sui.js";
 import type { BlobView, IndexedCommit, RepoIndex, TreeEntry } from "../indexer.js";
-import type { PullRequest, PullRequestComparison } from "../pull-requests.js";
+import type {
+  PullRequest,
+  PullRequestComparison,
+  PullRequestMergeability,
+  PullRequestStatusFilter
+} from "../pull-requests.js";
 import type { RepoActivityItem, RepoActivityProof } from "../repo-activity.js";
 import { faviconLinks, pageStyles } from "./styles.js";
 import { authPopupScript } from "./scripts.js";
@@ -893,6 +898,10 @@ const renderNewPullRequestButton = (repo: RepoListItem, viewer?: WebViewer): str
   return `<a class="github-button primary" href="${escapeAttr(pullRequestCreateHref(repo))}">${plusIcon}<span>New pull request</span></a>`;
 };
 
+const pullRequestStatusBadge = (status: PullRequest["status"]): string => {
+  return `<span class="badge status-${escapeAttr(status)}">${escapeHtml(status)}</span>`;
+};
+
 const renderPullRequestRows = (repo: RepoListItem, pullRequests: PullRequest[]): string => {
   if (pullRequests.length === 0) {
     return `<tr><td colspan="5" class="empty">No pull requests yet.</td></tr>`;
@@ -906,7 +915,7 @@ const renderPullRequestRows = (repo: RepoListItem, pullRequests: PullRequest[]):
         title: pullRequest.authorWalletAddress
       };
       return `<tr>
-          <td><span class="badge">${escapeHtml(pullRequest.status)}</span></td>
+          <td>${pullRequestStatusBadge(pullRequest.status)}</td>
           <td>
             <div class="pull-request-title">
               <a href="${escapeAttr(href)}">${escapeHtml(pullRequest.title)}</a>
@@ -1865,14 +1874,40 @@ ${authPopupScript}
 </html>`;
 };
 
+const renderPullRequestFilter = (
+  repo: RepoListItem,
+  allPullRequests: PullRequest[],
+  active: PullRequestStatusFilter
+): string => {
+  const counts = {
+    open: allPullRequests.filter((pullRequest) => pullRequest.status === "open").length,
+    closed: allPullRequests.filter((pullRequest) => pullRequest.status === "closed").length,
+    merged: allPullRequests.filter((pullRequest) => pullRequest.status === "merged").length,
+    all: allPullRequests.length
+  };
+
+  return `<nav class="pull-request-filter" aria-label="Filter pull requests">
+      ${(["open", "closed", "merged", "all"] as const)
+        .map((status) => {
+          const href = `${pullRequestAction(repo)}?status=${status}`;
+          const className = status === active ? ` class="active"` : "";
+          return `<a${className} href="${escapeAttr(href)}">${escapeHtml(`${counts[status]} ${status}`)}</a>`;
+        })
+        .join("")}
+    </nav>`;
+};
+
 export const renderPullRequestListPage = (input: {
   repo: RepoListItem;
   pullRequests: PullRequest[];
+  allPullRequests?: PullRequest[];
+  status?: PullRequestStatusFilter;
   viewer?: WebViewer;
 }): string => {
   const repo = input.repo;
   const rows = renderPullRequestRows(repo, input.pullRequests);
   const createButton = renderNewPullRequestButton(repo, input.viewer);
+  const filter = renderPullRequestFilter(repo, input.allPullRequests ?? input.pullRequests, input.status ?? "all");
 
   return `<!doctype html>
 <html lang="en">
@@ -1891,7 +1926,7 @@ ${topNavigation(input.viewer)}
     <main class="stack">
       <section class="toolbar">
         <div class="toolbar-group">
-          <span class="repo-stat">${escapeHtml(pluralize(input.pullRequests.length, "pull request"))}</span>
+          ${filter}
         </div>
         ${createButton}
       </section>
@@ -1941,12 +1976,117 @@ ${authPopupScript}
 </html>`;
 };
 
+const isPullRequestAuthor = (pullRequest: PullRequest, viewer?: WebViewer): boolean => {
+  return Boolean(viewer && viewer.walletAddress.toLowerCase() === pullRequest.authorWalletAddress.toLowerCase());
+};
+
+const renderPullRequestActionsPanel = (
+  repo: RepoListItem,
+  pullRequest: PullRequest,
+  comparison: PullRequestComparison,
+  mergeability: PullRequestMergeability | undefined,
+  viewer?: WebViewer,
+  errorMessage?: string
+): string => {
+  const canMerge = canWritePullRequests(repo, viewer);
+  const canTransition = canMerge || isPullRequestAuthor(pullRequest, viewer);
+  const actionBase = pullRequestHref(repo, pullRequest);
+  const errorNotice = errorMessage ? `<p class="notice">${escapeHtml(errorMessage)}</p>` : "";
+
+  const sections: string[] = [];
+  if (pullRequest.status === "merged") {
+    const strategy = pullRequest.mergeStrategy ? ` (${pullRequest.mergeStrategy})` : "";
+    const mergeCommit = pullRequest.mergeCommit
+      ? ` as <code title="${escapeAttr(pullRequest.mergeCommit)}">${escapeHtml(pullRequest.mergeCommit.slice(0, 8))}</code>`
+      : "";
+    sections.push(`<p class="summary-copy">Merged${escapeHtml(strategy)}${mergeCommit}.</p>`);
+  } else if (pullRequest.status === "open" && mergeability) {
+    sections.push(
+      mergeability.mergeable
+        ? `<p class="summary-copy">No conflicts with the base branch.</p>`
+        : `<p class="notice">${escapeHtml(mergeability.reason ?? "This pull request cannot be merged.")}</p>`
+    );
+  }
+
+  if (pullRequest.status === "open" && canMerge && mergeability?.mergeable) {
+    sections.push(`<form class="pull-request-merge-form" method="post" action="${escapeAttr(`${actionBase}/merge`)}">
+        <input type="hidden" name="expectedHeadCommit" value="${escapeAttr(comparison.headCommit)}">
+        <select class="pull-request-select" name="strategy" aria-label="Merge strategy">
+          <option value="merge">Create a merge commit</option>
+          <option value="squash">Squash and merge</option>
+          <option value="fast-forward">Fast-forward</option>
+        </select>
+        <label><input type="checkbox" name="deleteBranch" value="true"> Delete head branch</label>
+        <button class="github-button primary" type="submit">Merge pull request</button>
+      </form>`);
+  }
+
+  if (pullRequest.status === "open" && canTransition) {
+    sections.push(`<form method="post" action="${escapeAttr(`${actionBase}/close`)}">
+        <button class="github-button" type="submit">Close pull request</button>
+      </form>`);
+  }
+
+  if (pullRequest.status === "closed" && canTransition) {
+    sections.push(`<form method="post" action="${escapeAttr(`${actionBase}/reopen`)}">
+        <button class="github-button" type="submit">Reopen pull request</button>
+      </form>`);
+  }
+
+  if (!errorNotice && sections.length === 0) {
+    return "";
+  }
+
+  return `<section class="panel">
+      ${errorNotice}
+      <div class="pull-request-actions">${sections.join("")}</div>
+    </section>`;
+};
+
+const renderPullRequestComments = (repo: RepoListItem, pullRequest: PullRequest, viewer?: WebViewer): string => {
+  const comments = [...pullRequest.comments].sort((a, b) => a.createdAtMs - b.createdAtMs || a.id - b.id);
+  const thread =
+    comments.length === 0
+      ? `<p class="summary-copy">No comments yet.</p>`
+      : `<div class="comment-thread">${comments
+          .map((comment) => {
+            const author = actorDisplayForWallet(repo, comment.authorWalletAddress) ?? {
+              label: shortWallet(comment.authorWalletAddress),
+              title: comment.authorWalletAddress
+            };
+            return `<article class="comment-item">
+              <div class="comment-meta">
+                <span title="${escapeAttr(author.title)}">${escapeHtml(author.label)}</span>
+                <span title="${escapeAttr(formatDate(comment.createdAtMs))}">${escapeHtml(formatRelativeDate(comment.createdAtMs))}</span>
+              </div>
+              <p class="comment-body">${escapeHtml(comment.body)}</p>
+            </article>`;
+          })
+          .join("")}</div>`;
+
+  const canComment = canWritePullRequests(repo, viewer) || isPullRequestAuthor(pullRequest, viewer);
+  const form = canComment
+    ? `<form class="comment-form" method="post" action="${escapeAttr(`${pullRequestHref(repo, pullRequest)}/comments`)}">
+        <textarea class="pull-request-textarea" name="body" maxlength="10000" placeholder="Leave a comment" required></textarea>
+        <div><button class="github-button primary" type="submit">Comment</button></div>
+      </form>`
+    : "";
+
+  return `<section class="panel">
+      <h2>${escapeHtml(pluralize(comments.length, "comment"))}</h2>
+      ${thread}
+      ${form}
+    </section>`;
+};
+
 export const renderPullRequestPage = (input: {
   repo: RepoListItem;
   pullRequest: PullRequest;
   comparison: PullRequestComparison;
+  mergeability?: PullRequestMergeability;
   commitActors?: CommitActorMap;
   viewer?: WebViewer;
+  errorMessage?: string;
 }): string => {
   const repo = input.repo;
   const pullRequest = input.pullRequest;
@@ -1976,10 +2116,11 @@ ${topNavigation(input.viewer)}
             <h2>${escapeHtml(pullRequest.title)}</h2>
             <div class="pull-request-branches">${escapeHtml(shortRef(pullRequest.headRef))} into ${escapeHtml(shortRef(pullRequest.baseRef))}</div>
           </div>
-          <span class="badge">${escapeHtml(pullRequest.status)}</span>
+          ${pullRequestStatusBadge(pullRequest.status)}
         </div>
         ${body}
       </section>
+      ${renderPullRequestActionsPanel(repo, pullRequest, comparison, input.mergeability, input.viewer, input.errorMessage)}
       <section class="toolbar pull-request-summary">
         <div class="toolbar-group">
           <span class="repo-stat">${escapeHtml(pluralize(comparison.commitCount, "commit"))}</span>
@@ -2021,6 +2162,7 @@ ${topNavigation(input.viewer)}
           </tbody>
         </table>
       </section>
+      ${renderPullRequestComments(repo, pullRequest, input.viewer)}
     </main>
 ${authPopupScript}
   </body>

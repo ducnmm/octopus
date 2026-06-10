@@ -136,3 +136,9 @@ Private pushes to durable Walrus storage (`cli` or relay modes) require
 | `RAILWAY_GIT_COMMIT_SHA` | Server | Optional build metadata. |
 | `RAILWAY_DEPLOYMENT_ID` | Server | Optional build metadata. |
 | `RAILWAY_SERVICE_NAME` | Server | Optional build metadata. |
+
+## Runtime Requirements
+
+The server requires `git` >= 2.38 on its PATH: pull-request merges use
+`git merge-tree --write-tree`, which first shipped in Git 2.38. The server
+asserts this at startup and refuses to boot with an older Git.

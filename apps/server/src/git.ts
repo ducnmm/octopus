@@ -117,6 +117,25 @@ export const assertRepositoryExists = async (repoRoot: string, owner: string, re
   return path;
 };
 
+// Pull-request merges rely on `git merge-tree --write-tree` (Git >= 2.38).
+const minimumGitVersion = [2, 38] as const;
+
+export const assertGitVersionSupportsMergeTree = async (): Promise<void> => {
+  const raw = (await runGit(["--version"])).stdout.toString("utf8").trim();
+  const match = raw.match(/(\d+)\.(\d+)/);
+  if (!match) {
+    throw new Error(`Could not parse git version from "${raw}"`);
+  }
+
+  const major = Number.parseInt(match[1] ?? "0", 10);
+  const minor = Number.parseInt(match[2] ?? "0", 10);
+  if (major < minimumGitVersion[0] || (major === minimumGitVersion[0] && minor < minimumGitVersion[1])) {
+    throw new Error(
+      `Octopus requires git >= ${minimumGitVersion.join(".")} for pull-request merges (merge-tree --write-tree); found ${raw}`
+    );
+  }
+};
+
 const readRequestBody = async (request: FastifyRequest): Promise<Buffer> => {
   if (Buffer.isBuffer(request.body)) {
     return request.body;
@@ -190,6 +209,100 @@ const pruneRepairRefs = async (repoPath: string, refs: GitRefMap): Promise<void>
     if (refName.startsWith(repairRefPrefix)) {
       await runGit(["--git-dir", repoPath, "update-ref", "-d", refName, commit]);
     }
+  }
+};
+
+export type FinalizeRefUpdateResult = {
+  manifests: Awaited<ReturnType<typeof createPushArtifacts>>;
+  anchors: Awaited<ReturnType<typeof anchorPushManifests>>;
+};
+
+/**
+ * Durably finalizes ref changes already applied to the bare repo cache:
+ * bundle artifacts, Sui anchoring, push-attempt record, and index refresh.
+ * On failure the cache refs are rolled back to the authoritative (anchored)
+ * state, so every caller — git push or server-side merge — gets the same
+ * all-or-nothing guarantee.
+ */
+export const finalizeRefUpdate = async (input: {
+  config: ServerConfig;
+  repoPath: string;
+  owner: string;
+  repo: string;
+  repoState: SuiRepoState | null;
+  auth: AuthContext | null;
+  afterRefs: GitRefMap;
+}): Promise<FinalizeRefUpdateResult> => {
+  const { config, repoPath, owner, repo, repoState, auth, afterRefs } = input;
+  const authoritativeBeforeRefs = refsFromRepoState(repoState);
+  try {
+    const manifests = await createPushArtifacts({
+      dataDir: config.dataDir,
+      repoPath,
+      owner,
+      repo,
+      actorWalletAddress: auth?.walletAddress,
+      beforeRefs: authoritativeBeforeRefs,
+      afterRefs,
+      visibility: repoState?.visibility ?? "public",
+      repoObjectId: repoState?.repoObjectId,
+      packageId: config.suiPackageId,
+      accountId: auth?.accountId,
+      sealMode: config.sealMode,
+      walrusNetwork: config.walrusNetwork,
+      walrusUploadRelayUrl: config.walrusUploadRelayUrl,
+      suiRpcUrl: config.suiRpcUrl,
+      suiNetwork: config.suiNetwork,
+      serverSuiPrivateKeys: config.serverSuiPrivateKeys,
+      walrusOwnerAddress: repoState?.ownerWallet ?? auth?.walletAddress,
+      sealServerConfigs: config.sealServerConfigs,
+      sealKeyServers: config.sealKeyServers,
+      sealThreshold: config.sealThreshold
+    });
+
+    let anchors: FinalizeRefUpdateResult["anchors"] = [];
+    if (manifests.length > 0) {
+      anchors = await anchorPushManifests(config, manifests, auth);
+      await recordPushAttempt(config, {
+        owner,
+        repo,
+        status: "completed",
+        manifestIds: manifests.map((manifest) => manifest.manifestId),
+        actor: auth?.walletAddress,
+        createdAtMs: Date.now()
+      });
+      const indexedState = await readSuiRepoState(config, owner, repo);
+      if (indexedState) {
+        indexRepository(config, indexedState).catch(() => undefined);
+      }
+    }
+
+    await pruneRepairRefs(repoPath, afterRefs).catch(() => undefined);
+    return { manifests, anchors };
+  } catch (error) {
+    let rollbackError: unknown;
+    try {
+      await restoreRefs(repoPath, authoritativeBeforeRefs, afterRefs);
+    } catch (nextError) {
+      rollbackError = nextError;
+    }
+
+    await recordPushAttempt(config, {
+      owner,
+      repo,
+      status: "failed",
+      error: [
+        error instanceof Error ? error.message : String(error),
+        rollbackError
+          ? `Ref rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`
+          : undefined
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      actor: auth?.walletAddress,
+      createdAtMs: Date.now()
+    });
+    throw error;
   }
 };
 
@@ -306,77 +419,21 @@ export const handleGitHttp = async (
 
   if (isReceivePack && statusCode >= 200 && statusCode < 300 && cacheBeforeRefs) {
     const afterRefs = await listRefs(repoPath);
-    const authoritativeBeforeRefs = refsFromRepoState(repoState);
-    try {
-      const manifests = await createPushArtifacts({
-        dataDir: config.dataDir,
-        repoPath,
-        owner: repoRef.owner,
-        repo: repoRef.repo,
-        actorWalletAddress: auth?.walletAddress,
-        beforeRefs: authoritativeBeforeRefs,
-        afterRefs,
-        visibility: repoState?.visibility ?? "public",
-        repoObjectId: repoState?.repoObjectId,
-        packageId: config.suiPackageId,
-        accountId: auth?.accountId,
-        sealMode: config.sealMode,
-        walrusNetwork: config.walrusNetwork,
-        walrusUploadRelayUrl: config.walrusUploadRelayUrl,
-        suiRpcUrl: config.suiRpcUrl,
-        suiNetwork: config.suiNetwork,
-        serverSuiPrivateKeys: config.serverSuiPrivateKeys,
-        walrusOwnerAddress: repoState?.ownerWallet ?? auth?.walletAddress,
-        sealServerConfigs: config.sealServerConfigs,
-        sealKeyServers: config.sealKeyServers,
-        sealThreshold: config.sealThreshold
-      });
+    const { manifests, anchors } = await finalizeRefUpdate({
+      config,
+      repoPath,
+      owner: repoRef.owner,
+      repo: repoRef.repo,
+      repoState,
+      auth,
+      afterRefs
+    });
 
-      if (manifests.length > 0) {
-        const anchors = await anchorPushManifests(config, manifests, auth);
-        await recordPushAttempt(config, {
-          owner: repoRef.owner,
-          repo: repoRef.repo,
-          status: "completed",
-          manifestIds: manifests.map((manifest) => manifest.manifestId),
-          actor: auth?.walletAddress,
-          createdAtMs: Date.now()
-        });
-        reply.header("x-octopus-manifest-count", String(manifests.length));
-        reply.header("x-octopus-artifact-digest", manifests[0]?.artifactDigest ?? "");
-        reply.header("x-octopus-anchor-count", String(anchors.length));
-        reply.header("x-octopus-registry-mode", anchors[0]?.registryMode ?? config.suiMode);
-        const indexedState = await readSuiRepoState(config, repoRef.owner, repoRef.repo);
-        if (indexedState) {
-          indexRepository(config, indexedState).catch(() => undefined);
-        }
-      }
-
-      await pruneRepairRefs(repoPath, afterRefs).catch(() => undefined);
-    } catch (error) {
-      let rollbackError: unknown;
-      try {
-        await restoreRefs(repoPath, authoritativeBeforeRefs, afterRefs);
-      } catch (nextError) {
-        rollbackError = nextError;
-      }
-
-      await recordPushAttempt(config, {
-        owner: repoRef.owner,
-        repo: repoRef.repo,
-        status: "failed",
-        error: [
-          error instanceof Error ? error.message : String(error),
-          rollbackError
-            ? `Ref rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`
-            : undefined
-        ]
-          .filter(Boolean)
-          .join("\n"),
-        actor: auth?.walletAddress,
-        createdAtMs: Date.now()
-      });
-      throw error;
+    if (manifests.length > 0) {
+      reply.header("x-octopus-manifest-count", String(manifests.length));
+      reply.header("x-octopus-artifact-digest", manifests[0]?.artifactDigest ?? "");
+      reply.header("x-octopus-anchor-count", String(anchors.length));
+      reply.header("x-octopus-registry-mode", anchors[0]?.registryMode ?? config.suiMode);
     }
   }
 

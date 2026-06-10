@@ -2438,6 +2438,96 @@ export const pageStyles = `
         text-transform: capitalize;
       }
 
+      .badge.status-open {
+        border-color: var(--success-fg);
+        color: var(--success-fg);
+      }
+
+      .badge.status-merged {
+        border-color: var(--accent-fg);
+        color: var(--accent-fg);
+      }
+
+      .badge.status-closed {
+        border-color: var(--danger-fg);
+        color: var(--danger-fg);
+      }
+
+      .pull-request-filter {
+        display: inline-flex;
+        gap: 12px;
+      }
+
+      .pull-request-filter a {
+        color: var(--fg-muted);
+        font-size: 13px;
+        text-decoration: none;
+      }
+
+      .pull-request-filter a:hover {
+        color: var(--fg-default);
+      }
+
+      .pull-request-filter a.active {
+        color: var(--fg-default);
+        font-weight: 600;
+      }
+
+      .pull-request-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .pull-request-merge-form {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .pull-request-merge-form label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--fg-muted);
+        font-size: 13px;
+      }
+
+      .comment-thread {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .comment-item {
+        border: 1px solid var(--border-default);
+        border-radius: 6px;
+      }
+
+      .comment-meta {
+        display: flex;
+        gap: 8px;
+        border-bottom: 1px solid var(--border-default);
+        padding: 8px 12px;
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+
+      .comment-body {
+        margin: 0;
+        padding: 10px 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .comment-form {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
       .empty {
         height: 116px;
         color: var(--fg-muted);

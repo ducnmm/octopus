@@ -166,18 +166,54 @@ export const listRepoActivity = async (
       ]
     },
     ...manifests.map((manifest) => manifestActivity(config, manifest, pushActors.get(manifest.manifestId))),
-    ...pullRequests.map(
-      (pullRequest): RepoActivityItem => ({
-        id: `pull_request:${pullRequest.number}`,
-        kind: "pull_request",
-        title: `Opened pull request #${pullRequest.number}`,
-        description: `${shortRef(pullRequest.headRef)} into ${shortRef(pullRequest.baseRef)} · ${pullRequest.title}`,
-        actorWalletAddress: pullRequest.authorWalletAddress,
-        createdAtMs: pullRequest.createdAtMs,
-        href: `/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repo)}/pulls/${pullRequest.number}`,
-        proof: [...proof("Base", pullRequest.baseCommit), ...proof("Head", pullRequest.headCommit)]
-      })
-    ),
+    ...pullRequests.flatMap((pullRequest): RepoActivityItem[] => {
+      const href = `/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repo)}/pulls/${pullRequest.number}`;
+      const description = `${shortRef(pullRequest.headRef)} into ${shortRef(pullRequest.baseRef)} · ${pullRequest.title}`;
+      const items: RepoActivityItem[] = [
+        {
+          id: `pull_request:${pullRequest.number}`,
+          kind: "pull_request",
+          title: `Opened pull request #${pullRequest.number}`,
+          description,
+          actorWalletAddress: pullRequest.authorWalletAddress,
+          createdAtMs: pullRequest.createdAtMs,
+          href,
+          proof: [...proof("Base", pullRequest.baseCommit), ...proof("Head", pullRequest.headCommit)]
+        }
+      ];
+
+      if (pullRequest.status === "merged" && typeof pullRequest.mergedAtMs === "number") {
+        items.push({
+          id: `pull_request:${pullRequest.number}:merged`,
+          kind: "pull_request",
+          title: `Merged pull request #${pullRequest.number}`,
+          description,
+          actorWalletAddress: pullRequest.mergedBy,
+          createdAtMs: pullRequest.mergedAtMs,
+          href,
+          proof: [
+            ...proof("Merge commit", pullRequest.mergeCommit),
+            ...proof("Strategy", pullRequest.mergeStrategy),
+            ...proof("Head", pullRequest.headCommit)
+          ]
+        });
+      }
+
+      if (pullRequest.status === "closed" && typeof pullRequest.closedAtMs === "number") {
+        items.push({
+          id: `pull_request:${pullRequest.number}:closed`,
+          kind: "pull_request",
+          title: `Closed pull request #${pullRequest.number}`,
+          description,
+          actorWalletAddress: pullRequest.closedBy,
+          createdAtMs: pullRequest.closedAtMs,
+          href,
+          proof: [...proof("Base", pullRequest.baseCommit), ...proof("Head", pullRequest.headCommit)]
+        });
+      }
+
+      return items;
+    }),
     ...accessRecords.map((record): RepoActivityItem => {
       const action = record.action === "add" ? "granted" : "removed";
       const role = record.role === "reader" ? "Reader" : "Writer";
