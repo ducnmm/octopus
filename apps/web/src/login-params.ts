@@ -24,7 +24,7 @@ export type LoginParams = {
 
 export type LoginRuntimeDefaults = Pick<
   LoginParams,
-  "packageId" | "accountRegistryId" | "repoRegistryId"
+  "server" | "packageId" | "accountRegistryId" | "repoRegistryId"
 >;
 
 export type AuthPanelMode = "access" | "cli" | "web" | "unlock";
@@ -35,11 +35,12 @@ export const loginParamsFromSearch = (
 ): LoginParams => {
   const params = new URLSearchParams(search);
   return {
-    mode: params.get("mode") ?? "cli",
+    // Only the CLI login flow passes a callback URL; a bare visit is a web sign-in.
+    mode: params.get("mode") ?? (params.get("callback") ? "cli" : "web"),
     autoStart: params.get("autostart") === "1",
     embedded: params.get("embed") === "1",
     callback: params.get("callback") ?? "",
-    server: params.get("server") ?? "",
+    server: params.get("server") ?? defaults.server,
     returnTo: params.get("returnTo") ?? "/",
     owner: params.get("owner") ?? "",
     ownerWallet: params.get("ownerWallet") ?? "",

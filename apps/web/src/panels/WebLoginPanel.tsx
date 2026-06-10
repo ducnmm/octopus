@@ -1,8 +1,14 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import type { LoginParams } from "../login-params.js";
 import { useAuthFlow, type AuthAction } from "../hooks/useAuthFlow.js";
 import { useDelegateKit } from "../hooks/useDelegateKit.js";
-import { serverUrl, type WebSessionChallenge, type WebSessionResponse } from "../lib/api.js";
+import {
+  fetchAuthConfig,
+  fetchWebSessionStatus,
+  serverUrl,
+  type WebSessionChallenge,
+  type WebSessionResponse
+} from "../lib/api.js";
 import { finishBrowserFlow } from "../lib/browser-flow.js";
 import { resolveAccountId } from "../lib/sui.js";
 import { createAccount, type WalletContext } from "../lib/transactions.js";
@@ -11,6 +17,26 @@ import { DetailRow } from "../components/DetailRow.js";
 
 export function WebLoginPanel({ params }: { params: LoginParams }) {
   const kit = useDelegateKit();
+
+  useEffect(() => {
+    if (!params.server || params.autoStart || params.embedded) {
+      return;
+    }
+
+    let cancelled = false;
+    void fetchWebSessionStatus(params)
+      .then((status) => {
+        if (!cancelled && status.authenticated) {
+          finishBrowserFlow(params, params.returnTo || "/");
+        }
+      })
+      .catch(() => {
+        // No reachable session check: stay on the sign-in card.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [params]);
 
   const signIn = useCallback<AuthAction>(
     async ({ account, setState, setMessage }) => {
@@ -23,17 +49,33 @@ export function WebLoginPanel({ params }: { params: LoginParams }) {
       setState("working");
       setMessage("Checking Octopus account...");
 
-      let accountId: string | null = null;
-      if (params.packageId && params.accountRegistryId) {
+      let { packageId, accountRegistryId } = params;
+      if (!packageId || !accountRegistryId) {
         try {
-          accountId = await resolveAccountId(params.accountRegistryId, account.address);
+          const serverConfig = await fetchAuthConfig(params);
+          packageId ||= serverConfig.packageId ?? "";
+          accountRegistryId ||= serverConfig.accountRegistryId ?? "";
+        } catch {
+          // Server config unavailable: continue with a session-only login.
+        }
+      }
+
+      let accountId: string | null = null;
+      if (packageId && accountRegistryId) {
+        try {
+          accountId = await resolveAccountId(accountRegistryId, account.address);
         } catch {
           accountId = null;
         }
 
         if (!accountId) {
           setMessage("Creating Octopus account...");
-          const context: WalletContext = { kit, params, address: account.address, setMessage };
+          const context: WalletContext = {
+            kit,
+            params: { ...params, packageId, accountRegistryId },
+            address: account.address,
+            setMessage
+          };
           accountId = await createAccount(context);
         }
       }

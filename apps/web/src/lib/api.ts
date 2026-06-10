@@ -15,8 +15,29 @@ export type WebSessionResponse = {
   walletAddress?: string;
 };
 
+export type AuthConfigResponse = {
+  packageId?: string;
+  accountRegistryId?: string;
+  repoRegistryId?: string;
+};
+
+export type WebSessionStatus = {
+  authenticated?: boolean;
+  walletAddress?: string;
+};
+
 export const serverUrl = (params: Pick<LoginParams, "server">, path: string): string =>
   new URL(path, params.server || window.location.origin).toString();
+
+export const fetchAuthConfig = async (params: Pick<LoginParams, "server">): Promise<AuthConfigResponse> => {
+  const response = await fetch(serverUrl(params, "/v1/auth/config"));
+  return jsonResponse<AuthConfigResponse>(response, "Could not load server configuration");
+};
+
+export const fetchWebSessionStatus = async (params: Pick<LoginParams, "server">): Promise<WebSessionStatus> => {
+  const response = await fetch(serverUrl(params, "/v1/auth/web-session"), { credentials: "include" });
+  return jsonResponse<WebSessionStatus>(response, "Could not check web session");
+};
 
 export const jsonResponse = async <T,>(response: Response, fallback: string): Promise<T> => {
   const body = (await response.json().catch(() => ({}))) as { error?: string };
