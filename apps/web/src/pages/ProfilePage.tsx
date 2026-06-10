@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { RepoListItem } from "@ducnmm/octopus-shared";
 import { Link, useParams } from "react-router";
 import { AppShell } from "@/components/layout/AppShell.js";
@@ -5,6 +6,7 @@ import { DataBoundary } from "@/components/layout/DataBoundary.js";
 import { Badge } from "@/components/ui/badge.js";
 import { Card, CardContent } from "@/components/ui/card.js";
 import { useApiData } from "@/hooks/useApiData.js";
+import { suiClient } from "@/config.js";
 import {
   buildContributionActivity,
   buildContributionCalendar,
@@ -170,17 +172,66 @@ const PopularRepoGrid = ({ repos, emptyMessage }: { repos: RepoListItem[]; empty
 export const ProfilePage = () => {
   const { owner = "" } = useParams();
   const repos = useApiData(() => api.repos(), [owner]);
-  const ownerRepos = (repos.data?.repos ?? []).filter((repo) => repo.owner === owner);
+  const [resolvedName, setResolvedName] = useState<string | null>(null);
+  const [resolvedAddress, setResolvedAddress] = useState<string | null>(null);
+
+  useEffect(() => {
+    setResolvedName(null);
+    setResolvedAddress(null);
+
+    if (!owner) return;
+
+    if (owner.startsWith("0x")) {
+      suiClient
+        .resolveNameServiceNames({
+          address: owner,
+          limit: 1,
+          format: "dot"
+        })
+        .then((res) => {
+          if (res.data && res.data[0]) {
+            setResolvedName(res.data[0]);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to resolve SuiNS name:", err);
+        });
+    } else {
+      suiClient
+        .resolveNameServiceAddress({
+          name: owner
+        })
+        .then((res) => {
+          if (res) {
+            setResolvedAddress(res);
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to resolve SuiNS address:", err);
+        });
+    }
+  }, [owner]);
+
+  const matchOwners = [owner, resolvedName, resolvedAddress]
+    .filter(Boolean)
+    .map((o) => o!.toLowerCase());
+
+  const ownerRepos = (repos.data?.repos ?? []).filter((repo) =>
+    matchOwners.includes(repo.owner.toLowerCase())
+  );
+
+  const displayName = resolvedName || owner;
+  const subtitle = owner.startsWith("0x") ? (resolvedName ? owner : "") : (resolvedAddress || owner);
 
   return (
     <AppShell>
       <DataBoundary loading={repos.loading} error={repos.error} onRetry={() => void repos.reload()}>
-        <section aria-label={`${owner} profile`} className="grid gap-8 md:grid-cols-[240px_1fr]">
+        <section aria-label={`${displayName} profile`} className="grid gap-8 md:grid-cols-[240px_1fr]">
           <aside className="space-y-4">
             <img src="/android-chrome-192x192.png" alt="" width={240} height={240} className="rounded-full border" />
             <div>
-              <h1 className="break-all text-xl font-semibold">{owner}</h1>
-              <p className="break-all text-sm text-muted-foreground">{owner}</p>
+              <h1 className="break-all text-xl font-semibold">{displayName}</h1>
+              {subtitle ? <p className="break-all text-sm text-muted-foreground">{subtitle}</p> : null}
             </div>
             <ul className="text-sm text-muted-foreground">
               <li>
@@ -191,7 +242,7 @@ export const ProfilePage = () => {
           <div className="space-y-8" id="repositories">
             <div className="space-y-3">
               <h2 className="text-base font-semibold">Popular repositories</h2>
-              <PopularRepoGrid repos={ownerRepos} emptyMessage={`${owner} does not have visible repositories yet.`} />
+              <PopularRepoGrid repos={ownerRepos} emptyMessage={`${displayName} does not have visible repositories yet.`} />
             </div>
             <ContributionCalendar repos={ownerRepos} />
             <ContributionActivity repos={ownerRepos} />

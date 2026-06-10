@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { suiClient } from "@/config.js";
 import { Link, useLocation } from "react-router";
 import { LogOut, Plus, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
@@ -18,6 +19,31 @@ import { shortWallet } from "@/lib/format.js";
 const TopNav = () => {
   const { viewer, logout } = useViewer();
   const location = useLocation();
+  const [suinsName, setSuinsName] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (viewer?.walletAddress) {
+      suiClient
+        .resolveNameServiceNames({
+          address: viewer.walletAddress,
+          limit: 1,
+          format: "dot"
+        })
+        .then((res) => {
+          if (res.data && res.data[0]) {
+            setSuinsName(res.data[0]);
+          }
+        })
+        .catch(console.error);
+    } else {
+      setSuinsName(null);
+    }
+  }, [viewer?.walletAddress]);
+
+  const displayName = suinsName || (viewer ? shortWallet(viewer.walletAddress) : "");
+  const avatarFallbackText = suinsName
+    ? (suinsName.match(/[a-zA-Z]/g)?.join("").slice(0, 2).toUpperCase() || displayName.slice(0, 2).toUpperCase())
+    : viewer?.walletAddress.slice(2, 4).toUpperCase() || "";
 
   return (
     <header className="border-b bg-background">
@@ -46,13 +72,13 @@ const TopNav = () => {
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="sm" className="gap-2" title={viewer.walletAddress}>
                   <Avatar className="size-6">
-                    <AvatarFallback>{viewer.walletAddress.slice(2, 4).toUpperCase()}</AvatarFallback>
+                    <AvatarFallback>{avatarFallbackText}</AvatarFallback>
                   </Avatar>
-                  <span className="font-mono text-xs">{shortWallet(viewer.walletAddress)}</span>
+                  <span className={suinsName ? "text-sm font-medium" : "font-mono text-xs"}>{displayName}</span>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuLabel className="font-mono text-xs">{shortWallet(viewer.walletAddress)}</DropdownMenuLabel>
+                <DropdownMenuLabel className={suinsName ? "text-sm font-medium" : "font-mono text-xs"}>{displayName}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem asChild>
                   <Link to={`/${encodeURIComponent(viewer.walletAddress)}`}>Your profile</Link>
