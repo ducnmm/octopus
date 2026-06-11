@@ -38,11 +38,10 @@ const LandingPage = () => (
     </header>
     <section className="relative z-10 flex flex-1 flex-col justify-center gap-6 px-8 pb-24 md:max-w-2xl">
       <h1 className="text-5xl font-bold leading-tight md:text-6xl">
-        <span className="block">Git for code</span>
-        <span className="block">you control</span>
+        <span className="block">GitWal</span>
       </h1>
       <p className="max-w-xl text-lg text-white/80">
-        Octopus is a wallet-native Git platform for builders on Sui. Create repositories, manage access, and
+        Octopus is a Git platform for builders on Sui. Create repositories, manage access, and
         collaborate with cryptographic identity without leaving your Git workflow.
       </p>
       <div>

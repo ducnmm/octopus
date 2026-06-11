@@ -134,9 +134,9 @@ describe("HomePage", () => {
     stubFetch({ "/v1/auth/web-session": { authenticated: false } });
     renderAt("/", <HomePage />);
     await waitFor(() => {
-      expect(screen.getByText("Git for code")).toBeTruthy();
+      expect(screen.getByText("GitWal")).toBeTruthy();
     });
-    expect(screen.getByText(/wallet-native Git platform/)).toBeTruthy();
+    expect(screen.getByText(/Git platform/)).toBeTruthy();
     expect(screen.getByText(/Connect wallet/)).toBeTruthy();
   });
 
