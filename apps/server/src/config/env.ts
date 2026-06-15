@@ -95,6 +95,7 @@ const serverConfigSchema = z
     dataDir: z.string().min(1),
     repoRoot: z.string().min(1),
     webUrl: urlString,
+    webDistDir: z.string().min(1).optional(),
     suiMode: z.enum(["local", "testnet"]),
     suiNetwork: z.string().min(1),
     suiRpcUrl: urlString,
@@ -112,6 +113,7 @@ const serverConfigSchema = z
     sealThreshold: z.number().int().positive().optional(),
     webSessionSecret: z.string().min(1),
     delegateCacheTtlMs: z.number().int().min(0),
+    agentationEndpoint: urlString.optional(),
     enokiPrivateApiKey: z.string().min(1).optional(),
     enokiApiUrl: urlString.optional(),
     buildSha: z.string().min(1).optional(),
@@ -142,6 +144,7 @@ export const loadConfig = (): ServerConfig => {
     dataDir,
     repoRoot: resolve(dataDir, "repos"),
     webUrl: process.env.OCTOPUS_WEB_URL ?? "http://127.0.0.1:45173",
+    webDistDir: process.env.OCTOPUS_WEB_DIST_DIR || undefined,
     suiMode: process.env.OCTOPUS_SUI_MODE === "testnet" || process.env.SUI_NETWORK === "testnet" ? "testnet" : "local",
     suiNetwork: process.env.SUI_NETWORK ?? "localnet",
     suiRpcUrl:
@@ -161,6 +164,7 @@ export const loadConfig = (): ServerConfig => {
     sealThreshold: process.env.SEAL_THRESHOLD ? envInt(process.env.SEAL_THRESHOLD, 1) : undefined,
     webSessionSecret: process.env.OCTOPUS_WEB_SESSION_SECRET || defaultWebSessionSecret(dataDir),
     delegateCacheTtlMs: envInt(process.env.OCTOPUS_DELEGATE_CACHE_TTL_MS, 60_000),
+    agentationEndpoint: process.env.OCTOPUS_AGENTATION_ENDPOINT || undefined,
     enokiPrivateApiKey:
       process.env.ENOKI_PRIVATE_API_KEY ||
       process.env.OCTOPUS_ENOKI_PRIVATE_API_KEY ||

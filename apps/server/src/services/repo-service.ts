@@ -5,7 +5,7 @@ import { httpError } from "../lib/http-error.js";
 import { resolveRepoOwnerNamespace } from "../namespace.js";
 import type { Repositories } from "../repositories/index.js";
 import type { SuiRepoState } from "../sui.js";
-import { toRepoListItem } from "../views/pages.js";
+import { toRepoListItem } from "@ducnmm/octopus-shared";
 
 type RepoIndex = Awaited<ReturnType<Repositories["index"]["ensure"]>>;
 type PullRequestList = Awaited<ReturnType<Repositories["pullRequests"]["list"]>>;
@@ -72,7 +72,11 @@ export const createRepoService = (config: ServerConfig, repos: Repositories) => 
     }
 
     if (state.visibility === "private" && !repos.sui.canRead(state, auth)) {
-      throw httpError("Not authorized to read this repository", auth ? 403 : 401);
+      throw httpError(
+        "Not authorized to read this repository",
+        auth ? 403 : 401,
+        auth ? "forbidden" : "login_required"
+      );
     }
 
     return state;

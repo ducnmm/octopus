@@ -1,5 +1,8 @@
-## ADDED Requirements
+# server-module-architecture Specification
 
+## Purpose
+Define the server architecture, including layered concerns (routes, services, repositories) and modular feature-based plugin structure.
+## Requirements
 ### Requirement: Layered separation of HTTP, business, and data-access concerns
 
 The server SHALL organize code into three distinct layers — routes (HTTP), services (business logic), and repositories (data access) — with dependencies pointing inward only. Route handlers SHALL be thin: parse/validate input, authorize, delegate to a service, and shape the response. Business logic SHALL live in services. All access to storage, Git, Sui, Walrus, and Seal SHALL go through repositories. Services and repositories MUST NOT import Fastify request/reply types.
@@ -16,7 +19,7 @@ The server SHALL organize code into three distinct layers — routes (HTTP), ser
 
 ### Requirement: Feature-based Fastify plugin decomposition
 
-The server SHALL be composed of encapsulated Fastify plugins grouped by feature domain (at minimum: health, assets, auth/web-session, repos, pull-requests, git-http, enoki, and web UI), registered from a single `app.ts` that exposes a stable `buildServer(config)` entry point. No single source file SHALL register all routes, and the previous monolithic `server.ts` and `web.ts` SHALL no longer exist as catch-all modules.
+The server SHALL be composed of encapsulated Fastify plugins grouped by feature domain (at minimum: health, assets, auth/web-session, repos, pull-requests, git-http, enoki, and SPA static serving), registered from a single `app.ts` that exposes a stable `buildServer(config)` entry point. No single source file SHALL register all routes, and the previous monolithic `server.ts` and `web.ts` SHALL no longer exist as catch-all modules. The server MUST NOT render HTML pages: it SHALL NOT import view templates from `@octopus/web/views/*` or any other source, and web pages SHALL be delivered by serving the built SPA bundle. Types shared between server and web (such as the viewer identity and repo list item shapes) SHALL be imported from `@ducnmm/octopus-shared`.
 
 #### Scenario: Routes are registered via feature plugins
 
@@ -27,6 +30,11 @@ The server SHALL be composed of encapsulated Fastify plugins grouped by feature 
 
 - **WHEN** `index.ts` or an existing test calls `buildServer(config)`
 - **THEN** it returns a ready Fastify instance with the same public routes and behavior as before the restructure
+
+#### Scenario: No HTML view imports in the server
+
+- **WHEN** the server is compiled or run
+- **THEN** no server module imports from `@octopus/web/views/*`, no route handler sends `text/html` page markup it generated from templates, and shared view-model types resolve from `@ducnmm/octopus-shared`
 
 ### Requirement: Dependency injection via Fastify decorators
 
@@ -87,3 +95,4 @@ The server SHALL separate process bootstrap (`index.ts`: load config, build the 
 
 - **WHEN** `index.ts` is inspected
 - **THEN** it only loads config, builds the app via `buildServer`, starts listening, and wires shutdown — it registers no routes directly
+

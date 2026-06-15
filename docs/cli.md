@@ -125,6 +125,46 @@ git push origin main
 git clone http://127.0.0.1:48787/<owner>/demo.git
 ```
 
+### `octopus repo list`
+
+Lists repositories visible to you: public repositories plus private ones your
+delegate is authorized for. Works logged out (public repositories only).
+
+```bash
+octopus repo list
+octopus repo list --owner my-name.sui
+octopus repo list --dev
+```
+
+Options:
+
+| Option | Purpose |
+|---|---|
+| `--owner <owner>` | Only show repositories in this owner namespace. |
+| `--server <url>` | Target Octopus server. |
+| `-d, --dev` | Use local server default. |
+
+### `octopus repo clone <owner/name> [directory]`
+
+Clones a repository in one step. When logged in, the clone carries your
+delegate auth header (required for private repositories) and the working copy
+is left configured exactly like `repo connect`. When logged out, performs a
+plain anonymous clone (public repositories only).
+
+```bash
+octopus repo clone <owner>/demo
+octopus repo clone <owner>/demo my-dir
+octopus repo clone <owner>/demo --dev
+```
+
+Options:
+
+| Option | Purpose |
+|---|---|
+| `--remote <name>` | Git remote name. Defaults to `origin`. |
+| `--server <url>` | Target Octopus server. |
+| `-d, --dev` | Use local server default. |
+
 ### `octopus repo manifests <owner/name>`
 
 Lists artifact manifests known to the server.
@@ -171,6 +211,37 @@ Options:
 | `--body <body>` | Pull request description. |
 | `--server <url>` | Target Octopus server. |
 | `-d, --dev` | Use local server default. |
+
+### `octopus pr checkout <owner/name> <number>`
+
+Fetches the pull request's head branch from the remote and switches to a local
+branch tracking it. Run it inside a clone whose remote points at the Octopus
+server. Re-running fast-forwards the branch; it never rewrites local commits.
+
+```bash
+octopus pr checkout <owner>/demo 4
+octopus pr checkout <owner>/demo 4 --branch review/pr-4
+```
+
+Options:
+
+| Option | Purpose |
+|---|---|
+| `--remote <name>` | Git remote name. Defaults to `origin`. |
+| `--branch <name>` | Local branch name. Defaults to the head branch. |
+| `--server <url>` | Target Octopus server. |
+| `-d, --dev` | Use local server default. |
+
+### `octopus pr diff <owner/name> <number>`
+
+Prints the pull request's unified diff to stdout (pipe-friendly; applies with
+`git apply`). If the server truncated the patch at its size limit, a warning is
+printed to stderr.
+
+```bash
+octopus pr diff <owner>/demo 4
+octopus pr diff <owner>/demo 4 | less
+```
 
 ## Common Flows
 

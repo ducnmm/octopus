@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { serializerCompiler, validatorCompiler } from "fastify-type-provider-zod";
 import type { ServerConfig } from "./config/env.js";
 import { WebAuthStore } from "./lib/web-auth-store.js";
+import { agentationPlugin } from "./plugins/agentation.js";
 import { authContextPlugin } from "./plugins/auth-context.js";
 import { containerPlugin, type ServiceContainer } from "./plugins/container.js";
 import { contentParsersPlugin } from "./plugins/content-parsers.js";
@@ -47,6 +48,7 @@ export const buildServer = (config: ServerConfig) => {
   app.register(contentParsersPlugin);
   app.register(containerPlugin, { container });
   app.register(authContextPlugin, { config, webAuthStore });
+  app.register(agentationPlugin, { config });
 
   registerRoutes(app, { config, repositories, services });
 

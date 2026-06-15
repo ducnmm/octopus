@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { execFile, spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { platform } from "node:os";
+import { resolve } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import {
   authCallbackRequestSchema,
@@ -60,6 +61,25 @@ type RepoConnectOptions = {
   dev?: boolean;
 };
 
+type RepoListOptions = {
+  owner?: string;
+  server?: string;
+  dev?: boolean;
+};
+
+type RepoCloneOptions = {
+  remote: string;
+  server?: string;
+  dev?: boolean;
+};
+
+type PullRequestCheckoutOptions = {
+  remote: string;
+  branch?: string;
+  server?: string;
+  dev?: boolean;
+};
+
 type PullRequestCreateOptions = {
   base?: string;
   head: string;
@@ -67,6 +87,54 @@ type PullRequestCreateOptions = {
   body?: string;
   server?: string;
   dev?: boolean;
+};
+
+type PullRequestListOptions = {
+  status?: string;
+  server?: string;
+  dev?: boolean;
+};
+
+type PullRequestMergeOptions = {
+  strategy?: string;
+  deleteBranch?: boolean;
+  server?: string;
+  dev?: boolean;
+};
+
+type PullRequestCommentOptions = {
+  body: string;
+  server?: string;
+  dev?: boolean;
+};
+
+type PullRequestSummary = {
+  number: number;
+  title: string;
+  status: string;
+  baseRef: string;
+  headRef: string;
+  headCommit: string;
+  authorWalletAddress: string;
+  comments?: Array<{ id: number }>;
+};
+
+type PullRequestDetailResponse = {
+  pullRequest: PullRequestSummary & {
+    body: string;
+    mergeCommit?: string;
+    mergeStrategy?: string;
+    mergedBy?: string;
+  };
+  comparison: {
+    commitCount: number;
+    fileCount: number;
+    additions: number;
+    deletions: number;
+    patch: string;
+    patchTruncated: boolean;
+  };
+  mergeability?: { mergeable: boolean; reason?: string };
 };
 
 type AuthServerConfig = {
@@ -266,6 +334,14 @@ const runGit = async (args: string[], cwd?: string): Promise<string> => {
   });
 };
 
+const gitAuthHeaderValue = async (credentials: OctopusCredentials): Promise<string> => {
+  return `${delegateAuthHeaders.token}: ${await createDelegateAuthToken({
+    credentials,
+    scope: "git",
+    expiresInMs: GIT_AUTH_EXPIRES_IN_MS
+  })}`;
+};
+
 const configureRemote = async (
   cwd: string | undefined,
   remoteName: string,
@@ -286,17 +362,7 @@ const configureRemote = async (
     // The key is absent on first connect.
   }
 
-  await runGit([
-    "config",
-    "--local",
-    "--add",
-    configKey,
-    `${delegateAuthHeaders.token}: ${await createDelegateAuthToken({
-      credentials,
-      scope: "git",
-      expiresInMs: GIT_AUTH_EXPIRES_IN_MS
-    })}`
-  ], cwd);
+  await runGit(["config", "--local", "--add", configKey, await gitAuthHeaderValue(credentials)], cwd);
 };
 
 const startLoginCallbackServer = async (input: {
@@ -570,6 +636,79 @@ export const createProgram = (context: CliContext): Command => {
     });
 
   repoCommand
+    .command("list")
+    .option("--owner <owner>", "only show repositories in this owner namespace")
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
+    .description("List repositories visible to you")
+    .action(async (options: RepoListOptions) => {
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      const response = await requestJson<{
+        repos: Array<{ owner: string; name: string; visibility: string }>;
+      }>(new URL("/v1/repos", serverUrl).toString(), {
+        fetch: context.fetch,
+        method: "GET",
+        headers: await authHeaders(context.home)
+      });
+
+      const repos = options.owner
+        ? response.repos.filter((repo) => repo.owner === options.owner)
+        : response.repos;
+      if (repos.length === 0) {
+        writeLine(
+          context.stdout,
+          options.owner ? `No repositories found for ${options.owner}` : "No repositories found"
+        );
+        return;
+      }
+
+      for (const repo of repos) {
+        writeLine(context.stdout, `${repo.owner}/${repo.name} (${repo.visibility})`);
+      }
+    });
+
+  repoCommand
+    .command("clone")
+    .argument("<repo>", "repository in owner/name form")
+    .argument("[directory]", "target directory; defaults to the repository name")
+    .option("--remote <name>", "Git remote name", "origin")
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
+    .description("Clone a repository and configure delegate auth in one step")
+    .action(async (repo: string, directory: string | undefined, options: RepoCloneOptions) => {
+      const { owner, name } = splitRepo(repo);
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      const remoteUrl = new URL(`/${owner}/${name}.git`, serverUrl).toString();
+      const credentials = await readCredentials(context.home);
+      const targetDir = directory ?? name;
+
+      const cloneArgs = ["clone", "--origin", options.remote];
+      if (credentials) {
+        cloneArgs.push("-c", `http.${remoteUrl}.extraHeader=${await gitAuthHeaderValue(credentials)}`);
+      }
+      cloneArgs.push(remoteUrl, targetDir);
+
+      try {
+        await runGit(cloneArgs, context.cwd);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!credentials) {
+          throw new Error(`${message}\nIf ${repo} is private, run octopus auth login first.`);
+        }
+        throw new Error(message);
+      }
+
+      if (credentials) {
+        await configureRemote(resolve(context.cwd ?? process.cwd(), targetDir), options.remote, remoteUrl, credentials);
+      }
+
+      writeLine(context.stdout, `Cloned ${repo}`);
+      writeLine(context.stdout, `  directory: ${targetDir}`);
+      writeLine(context.stdout, `  remote:    ${options.remote}`);
+      writeLine(context.stdout, `  url:       ${remoteUrl}`);
+    });
+
+  repoCommand
     .command("manifests")
     .argument("<repo>", "repository in owner/name form")
     .option("--server <url>", "Octopus server URL")
@@ -698,6 +837,285 @@ export const createProgram = (context: CliContext): Command => {
       writeLine(context.stdout, `  base:  ${response.pullRequest.baseRef.replace(/^refs\/heads\//, "")}`);
       writeLine(context.stdout, `  head:  ${response.pullRequest.headRef.replace(/^refs\/heads\//, "")}`);
       writeLine(context.stdout, `  url:   ${href}`);
+    });
+
+  const parsePullNumber = (value: string): number => {
+    if (!/^[1-9][0-9]*$/.test(value)) {
+      throw new InvalidArgumentError("pull request number must be a positive integer");
+    }
+    return Number.parseInt(value, 10);
+  };
+
+  const shortBranch = (ref: string): string => ref.replace(/^refs\/heads\//, "");
+
+  const fetchPullRequestDetail = async (
+    serverUrl: string,
+    owner: string,
+    name: string,
+    pull: number
+  ): Promise<PullRequestDetailResponse> => {
+    return await requestJson<PullRequestDetailResponse>(
+      new URL(`/v1/repos/${owner}/${name}/pulls/${pull}`, serverUrl).toString(),
+      {
+        fetch: context.fetch,
+        method: "GET",
+        headers: await authHeaders(context.home)
+      }
+    );
+  };
+
+  pullRequestCommand
+    .command("list")
+    .argument("<repo>", "repository in owner/name form")
+    .option("--status <status>", "filter by status: open, closed, merged, or all", "all")
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
+    .description("List pull requests")
+    .action(async (repo: string, options: PullRequestListOptions) => {
+      const { owner, name } = splitRepo(repo);
+      if (!["open", "closed", "merged", "all"].includes(options.status ?? "all")) {
+        throw new InvalidArgumentError("--status expects open, closed, merged, or all");
+      }
+
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      const url = new URL(`/v1/repos/${owner}/${name}/pulls`, serverUrl);
+      url.searchParams.set("status", options.status ?? "all");
+      const response = await requestJson<{ pullRequests: PullRequestSummary[] }>(url.toString(), {
+        fetch: context.fetch,
+        method: "GET",
+        headers: await authHeaders(context.home)
+      });
+
+      if (response.pullRequests.length === 0) {
+        writeLine(context.stdout, `No ${options.status === "all" ? "" : `${options.status} `}pull requests for ${repo}`);
+        return;
+      }
+
+      for (const pullRequest of response.pullRequests) {
+        writeLine(
+          context.stdout,
+          `#${pullRequest.number} [${pullRequest.status}] ${pullRequest.title} (${shortBranch(pullRequest.headRef)} -> ${shortBranch(pullRequest.baseRef)})`
+        );
+      }
+    });
+
+  pullRequestCommand
+    .command("view")
+    .argument("<repo>", "repository in owner/name form")
+    .argument("<number>", "pull request number", parsePullNumber)
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
+    .description("Show a pull request")
+    .action(async (repo: string, pull: number, options: RepoServerOptions) => {
+      const { owner, name } = splitRepo(repo);
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      const detail = await fetchPullRequestDetail(serverUrl, owner, name, pull);
+      const pullRequest = detail.pullRequest;
+
+      writeLine(context.stdout, `#${pullRequest.number} ${pullRequest.title}`);
+      writeLine(context.stdout, `  status:   ${pullRequest.status}`);
+      writeLine(context.stdout, `  base:     ${shortBranch(pullRequest.baseRef)}`);
+      writeLine(context.stdout, `  head:     ${shortBranch(pullRequest.headRef)} @ ${pullRequest.headCommit.slice(0, 8)}`);
+      writeLine(context.stdout, `  author:   ${pullRequest.authorWalletAddress}`);
+      writeLine(
+        context.stdout,
+        `  changes:  ${detail.comparison.commitCount} commits, ${detail.comparison.fileCount} files (+${detail.comparison.additions} -${detail.comparison.deletions})`
+      );
+      writeLine(context.stdout, `  comments: ${pullRequest.comments?.length ?? 0}`);
+      if (pullRequest.status === "open" && detail.mergeability) {
+        writeLine(
+          context.stdout,
+          `  mergeable: ${detail.mergeability.mergeable ? "yes" : `no (${detail.mergeability.reason ?? "unknown"})`}`
+        );
+      }
+      if (pullRequest.status === "merged" && pullRequest.mergeCommit) {
+        writeLine(context.stdout, `  merged:   ${pullRequest.mergeCommit.slice(0, 8)} (${pullRequest.mergeStrategy ?? "merge"})`);
+      }
+      writeLine(context.stdout, `  url:      ${new URL(`/${owner}/${name}/pulls/${pull}`, serverUrl).toString()}`);
+    });
+
+  pullRequestCommand
+    .command("checkout")
+    .argument("<repo>", "repository in owner/name form")
+    .argument("<number>", "pull request number", parsePullNumber)
+    .option("--remote <name>", "Git remote name", "origin")
+    .option("--branch <name>", "local branch name; defaults to the head branch")
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
+    .description("Check out a pull request head branch locally")
+    .action(async (repo: string, pull: number, options: PullRequestCheckoutOptions) => {
+      const { owner, name } = splitRepo(repo);
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      const detail = await fetchPullRequestDetail(serverUrl, owner, name, pull);
+      const headBranch = shortBranch(detail.pullRequest.headRef);
+      const localBranch = options.branch ?? headBranch;
+      const trackingRef = `refs/remotes/${options.remote}/${headBranch}`;
+
+      try {
+        await runGit(["fetch", options.remote, `+${detail.pullRequest.headRef}:${trackingRef}`], context.cwd);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Could not fetch head branch ${headBranch} from ${options.remote}; it may have been deleted.\n${message}`
+        );
+      }
+
+      let localBranchExists = true;
+      try {
+        await runGit(["rev-parse", "--verify", `refs/heads/${localBranch}`], context.cwd);
+      } catch {
+        localBranchExists = false;
+      }
+
+      if (localBranchExists) {
+        await runGit(["switch", localBranch], context.cwd);
+        await runGit(["merge", "--ff-only", trackingRef], context.cwd);
+      } else {
+        await runGit(["switch", "-c", localBranch, "--track", `${options.remote}/${headBranch}`], context.cwd);
+      }
+
+      writeLine(context.stdout, `Checked out pull request #${pull} ${repo}`);
+      writeLine(context.stdout, `  branch: ${localBranch}`);
+      writeLine(context.stdout, `  head:   ${headBranch} @ ${detail.pullRequest.headCommit.slice(0, 8)}`);
+    });
+
+  pullRequestCommand
+    .command("diff")
+    .argument("<repo>", "repository in owner/name form")
+    .argument("<number>", "pull request number", parsePullNumber)
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
+    .description("Print a pull request diff")
+    .action(async (repo: string, pull: number, options: RepoServerOptions) => {
+      const { owner, name } = splitRepo(repo);
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      const detail = await fetchPullRequestDetail(serverUrl, owner, name, pull);
+      if (detail.comparison.patchTruncated) {
+        writeLine(
+          context.stderr,
+          `warning: the diff for pull request #${pull} was truncated by the server; fetch the branch and diff locally for the full patch`
+        );
+      }
+      context.stdout.write(detail.comparison.patch);
+    });
+
+  pullRequestCommand
+    .command("merge")
+    .argument("<repo>", "repository in owner/name form")
+    .argument("<number>", "pull request number", parsePullNumber)
+    .option("--strategy <strategy>", "merge strategy: merge, squash, or fast-forward", "merge")
+    .option("--delete-branch", "delete the head branch after merging")
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
+    .description("Merge an open pull request")
+    .action(async (repo: string, pull: number, options: PullRequestMergeOptions) => {
+      const { owner, name } = splitRepo(repo);
+      if (!["merge", "squash", "fast-forward"].includes(options.strategy ?? "merge")) {
+        throw new InvalidArgumentError("--strategy expects merge, squash, or fast-forward");
+      }
+
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      // Send the reviewed head commit so the server rejects merges of a head
+      // that moved after this lookup.
+      const detail = await fetchPullRequestDetail(serverUrl, owner, name, pull);
+      const response = await requestJson<{
+        pullRequest: PullRequestSummary;
+        mergeCommit: string;
+        branchDeleted: boolean;
+        branchDeleteSkippedReason?: string;
+      }>(new URL(`/v1/repos/${owner}/${name}/pulls/${pull}/merge`, serverUrl).toString(), {
+        fetch: context.fetch,
+        method: "POST",
+        headers: await authHeaders(context.home),
+        body: JSON.stringify({
+          strategy: options.strategy ?? "merge",
+          expectedHeadCommit: detail.pullRequest.headCommit,
+          deleteBranch: Boolean(options.deleteBranch)
+        })
+      });
+
+      writeLine(context.stdout, `Merged pull request #${pull} ${repo}`);
+      writeLine(context.stdout, `  commit:   ${response.mergeCommit}`);
+      writeLine(context.stdout, `  strategy: ${options.strategy ?? "merge"}`);
+      if (options.deleteBranch) {
+        writeLine(
+          context.stdout,
+          response.branchDeleted
+            ? `  branch:   deleted ${shortBranch(detail.pullRequest.headRef)}`
+            : `  branch:   kept (${response.branchDeleteSkippedReason ?? "not eligible"})`
+        );
+      }
+    });
+
+  pullRequestCommand
+    .command("close")
+    .argument("<repo>", "repository in owner/name form")
+    .argument("<number>", "pull request number", parsePullNumber)
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
+    .description("Close an open pull request without merging")
+    .action(async (repo: string, pull: number, options: RepoServerOptions) => {
+      const { owner, name } = splitRepo(repo);
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      const response = await requestJson<{ pullRequest: PullRequestSummary }>(
+        new URL(`/v1/repos/${owner}/${name}/pulls/${pull}/close`, serverUrl).toString(),
+        {
+          fetch: context.fetch,
+          method: "POST",
+          headers: await authHeaders(context.home)
+        }
+      );
+
+      writeLine(context.stdout, `Closed pull request #${response.pullRequest.number} ${repo}`);
+    });
+
+  pullRequestCommand
+    .command("reopen")
+    .argument("<repo>", "repository in owner/name form")
+    .argument("<number>", "pull request number", parsePullNumber)
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
+    .description("Reopen a closed pull request")
+    .action(async (repo: string, pull: number, options: RepoServerOptions) => {
+      const { owner, name } = splitRepo(repo);
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      const response = await requestJson<{ pullRequest: PullRequestSummary }>(
+        new URL(`/v1/repos/${owner}/${name}/pulls/${pull}/reopen`, serverUrl).toString(),
+        {
+          fetch: context.fetch,
+          method: "POST",
+          headers: await authHeaders(context.home)
+        }
+      );
+
+      writeLine(context.stdout, `Reopened pull request #${response.pullRequest.number} ${repo}`);
+    });
+
+  pullRequestCommand
+    .command("comment")
+    .argument("<repo>", "repository in owner/name form")
+    .argument("<number>", "pull request number", parsePullNumber)
+    .requiredOption("--body <text>", "comment body")
+    .option("--server <url>", "Octopus server URL")
+    .option("-d, --dev", "use the local dev server")
+    .description("Comment on a pull request")
+    .action(async (repo: string, pull: number, options: PullRequestCommentOptions) => {
+      const { owner, name } = splitRepo(repo);
+      const serverUrl = serverUrlFromOptions(options, context.env);
+      const response = await requestJson<{ comment: { id: number; createdAtMs: number } }>(
+        new URL(`/v1/repos/${owner}/${name}/pulls/${pull}/comments`, serverUrl).toString(),
+        {
+          fetch: context.fetch,
+          method: "POST",
+          headers: await authHeaders(context.home),
+          body: JSON.stringify({ body: options.body })
+        }
+      );
+
+      writeLine(
+        context.stdout,
+        `Commented on pull request #${pull} ${repo} (comment ${response.comment.id} at ${new Date(response.comment.createdAtMs).toISOString()})`
+      );
     });
 
   return program;

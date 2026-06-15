@@ -1,127 +1,97 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { AuthContext } from "../auth.js";
 import { httpError } from "../lib/http-error.js";
-import { createPullRequestInput, isFormPost, pullRequestNumber } from "../lib/request-helpers.js";
-import { webViewerFromRequest } from "../plugins/auth-context.js";
-import { renderPullRequestCreatePage, renderPullRequestListPage, renderPullRequestPage } from "../views/pages.js";
+import {
+  createPullRequestInput,
+  mergePullRequestInput,
+  pullRequestCommentInput,
+  pullRequestNumber,
+  pullRequestStatusFilter
+} from "../lib/request-helpers.js";
 import type { RouteDeps } from "./index.js";
 
+type PullParams = { Params: { owner: string; repo: string; pull: string } };
+type RepoParams = { Params: { owner: string; repo: string } };
+
 export const pullRequestRoutes = async (app: FastifyInstance, deps: RouteDeps) => {
-  const { repositories: repos, services, ctx } = deps;
+  const { services, ctx } = deps;
 
-  app.get<{ Params: { owner: string; repo: string } }>("/v1/repos/:owner/:repo/pulls", async (request) => {
-    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
-    ctx.requireRepoContentAccess(request, state);
-    return { pullRequests: await services.pullRequestService.list(state.owner, state.repo) };
-  });
-
-  app.post<{ Params: { owner: string; repo: string } }>("/v1/repos/:owner/:repo/pulls", async (request, reply) => {
-    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
-    ctx.requireRepoContentAccess(request, state);
+  const requireAuthContext = async (request: FastifyRequest, message: string): Promise<AuthContext> => {
     const auth = await ctx.requestAuthContext(request);
     if (!auth) {
-      throw httpError("Authentication is required to open a pull request", 401);
+      throw httpError(message, 401);
     }
+    return auth;
+  };
 
+  app.get<RepoParams & { Querystring: { status?: string } }>("/v1/repos/:owner/:repo/pulls", async (request) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    ctx.requireRepoContentAccess(request, state);
+    const status = pullRequestStatusFilter(request.query.status, "all");
+    return { pullRequests: await services.pullRequestService.list(state.owner, state.repo, status) };
+  });
+
+  app.post<RepoParams>("/v1/repos/:owner/:repo/pulls", async (request, reply) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    ctx.requireRepoContentAccess(request, state);
+    const auth = await requireAuthContext(request, "Authentication is required to open a pull request");
     const pullRequest = await services.pullRequestService.create(state, createPullRequestInput(request.body), auth);
     await reply.code(201).send({ pullRequest });
   });
 
-  app.get<{ Params: { owner: string; repo: string; pull: string } }>(
-    "/v1/repos/:owner/:repo/pulls/:pull",
-    async (request) => {
-      const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
-      ctx.requireRepoContentAccess(request, state);
-      return await services.pullRequestService.readWithComparison(state, pullRequestNumber(request.params.pull));
-    }
-  );
+  app.get<PullParams>("/v1/repos/:owner/:repo/pulls/:pull", async (request) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    ctx.requireRepoContentAccess(request, state);
+    return await services.pullRequestService.readWithComparison(state, pullRequestNumber(request.params.pull));
+  });
 
-  app.get<{ Params: { owner: string; repo: string } }>("/:owner/:repo/pulls", async (request, reply) => {
-    const state = await ctx.authorizedHtmlRepoContentState(request, reply);
-    if (!state) {
-      return;
-    }
-
-    const pullRequests = await services.pullRequestService.list(state.owner, state.repo);
-    await reply.type("text/html; charset=utf-8").send(
-      renderPullRequestListPage({
-        repo: await services.repoService.listItemWithCounts(state, { pullRequests }),
-        pullRequests,
-        viewer: webViewerFromRequest(request)
-      })
+  app.post<PullParams>("/v1/repos/:owner/:repo/pulls/:pull/merge", async (request) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    ctx.requireRepoContentAccess(request, state);
+    const auth = await requireAuthContext(request, "Authentication is required to merge a pull request");
+    const result = await services.pullRequestService.merge(
+      state,
+      pullRequestNumber(request.params.pull),
+      mergePullRequestInput(request.body),
+      auth
     );
+    return result;
   });
 
-  app.post<{ Params: { owner: string; repo: string } }>("/:owner/:repo/pulls", async (request, reply) => {
-    const state = await ctx.authorizedHtmlRepoContentState(request, reply);
-    if (!state) {
-      return;
-    }
-
-    const auth = await ctx.requestAuthContext(request);
-    if (!auth) {
-      throw httpError("Sign in before opening a pull request", 401);
-    }
-
-    const pullRequest = await services.pullRequestService.create(state, createPullRequestInput(request.body), auth);
-    if (isFormPost(request)) {
-      await reply
-        .code(303)
-        .header(
-          "location",
-          `/${encodeURIComponent(state.owner)}/${encodeURIComponent(state.repo)}/pulls/${pullRequest.number}`
-        )
-        .send();
-      return;
-    }
-
-    await reply.code(201).send({ pullRequest });
+  app.post<PullParams>("/v1/repos/:owner/:repo/pulls/:pull/close", async (request) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    ctx.requireRepoContentAccess(request, state);
+    const auth = await requireAuthContext(request, "Authentication is required to close a pull request");
+    return {
+      pullRequest: await services.pullRequestService.close(state, pullRequestNumber(request.params.pull), auth)
+    };
   });
 
-  app.get<{ Params: { owner: string; repo: string } }>("/:owner/:repo/pulls/new", async (request, reply) => {
-    const state = await ctx.authorizedHtmlRepoContentState(request, reply);
-    if (!state) {
-      return;
-    }
+  app.post<PullParams>("/v1/repos/:owner/:repo/pulls/:pull/reopen", async (request) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    ctx.requireRepoContentAccess(request, state);
+    const auth = await requireAuthContext(request, "Authentication is required to reopen a pull request");
+    return {
+      pullRequest: await services.pullRequestService.reopen(state, pullRequestNumber(request.params.pull), auth)
+    };
+  });
 
-    const auth = await ctx.requestAuthContext(request);
-    if (!auth) {
-      throw httpError("Sign in before opening a pull request", 401);
-    }
-    if (!repos.sui.canWrite(state, auth)) {
-      throw httpError("Write access is required to open a pull request", 403);
-    }
+  app.get<PullParams>("/v1/repos/:owner/:repo/pulls/:pull/comments", async (request) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    ctx.requireRepoContentAccess(request, state);
+    return { comments: await services.pullRequestService.listComments(state, pullRequestNumber(request.params.pull)) };
+  });
 
-    await reply.type("text/html; charset=utf-8").send(
-      renderPullRequestCreatePage({
-        repo: await services.repoService.listItemWithCounts(state),
-        viewer: webViewerFromRequest(request) ?? { walletAddress: auth.walletAddress }
-      })
+  app.post<PullParams>("/v1/repos/:owner/:repo/pulls/:pull/comments", async (request, reply) => {
+    const state = await ctx.authorizedRepoState(request, request.params.owner, request.params.repo);
+    ctx.requireRepoContentAccess(request, state);
+    const auth = await requireAuthContext(request, "Authentication is required to comment on a pull request");
+    const { comment } = await services.pullRequestService.addComment(
+      state,
+      pullRequestNumber(request.params.pull),
+      pullRequestCommentInput(request.body).body,
+      auth
     );
+    await reply.code(201).send({ comment });
   });
-
-  app.get<{ Params: { owner: string; repo: string; pull: string } }>(
-    "/:owner/:repo/pulls/:pull",
-    async (request, reply) => {
-      const state = await ctx.authorizedHtmlRepoContentState(request, reply);
-      if (!state) {
-        return;
-      }
-
-      const { pullRequest, comparison } = await services.pullRequestService.readWithComparison(
-        state,
-        pullRequestNumber(request.params.pull)
-      );
-      const repoPath = repos.git.path(state.owner, state.repo);
-
-      await reply.type("text/html; charset=utf-8").send(
-        renderPullRequestPage({
-          repo: await services.repoService.listItemWithCounts(state),
-          pullRequest,
-          comparison,
-          commitActors: await repos.commitActors.read(state, repoPath),
-          viewer: webViewerFromRequest(request)
-        })
-      );
-    }
-  );
 };

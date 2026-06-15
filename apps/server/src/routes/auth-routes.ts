@@ -12,53 +12,8 @@ export const authRoutes = async (app: FastifyInstance, deps: RouteDeps) => {
   const isSecure = (request: Parameters<typeof ctx.serverOriginForRequest>[0]): boolean =>
     ctx.serverOriginForRequest(request).startsWith("https://");
 
-  app.get<{
-    Querystring: {
-      action?: string;
-      autostart?: string;
-      embed?: string;
-      mode?: string;
-      owner?: string;
-      ownerWallet?: string;
-      repo?: string;
-      repoObjectId?: string;
-      returnTo?: string;
-      role?: string;
-      walletAddress?: string;
-    };
-  }>("/login", async (request, reply) => {
-    const mode = request.query.mode === "access" || request.query.mode === "unlock" ? request.query.mode : "web";
-    const serverOrigin = ctx.serverOriginForRequest(request);
-    const url = new URL("/login", config.webUrl);
-    url.searchParams.set("mode", mode);
-    url.searchParams.set("server", serverOrigin);
-    url.searchParams.set(
-      "returnTo",
-      normalizeReturnTo(request.query.returnTo ?? request.headers.referer, serverOrigin)
-    );
-    url.searchParams.set("autostart", request.query.autostart === "0" ? "0" : "1");
-    if (request.query.embed === "1") {
-      url.searchParams.set("embed", "1");
-    }
-
-    for (const key of ["action", "owner", "ownerWallet", "repo", "repoObjectId", "role", "walletAddress"] as const) {
-      const value = request.query[key];
-      if (typeof value === "string" && value.trim()) {
-        url.searchParams.set(key, value.trim());
-      }
-    }
-    if (config.suiPackageId) {
-      url.searchParams.set("packageId", config.suiPackageId);
-    }
-    if (config.accountRegistryId) {
-      url.searchParams.set("accountRegistryId", config.accountRegistryId);
-    }
-    if (config.repoRegistryId) {
-      url.searchParams.set("repoRegistryId", config.repoRegistryId);
-    }
-
-    await reply.code(302).header("location", url.toString()).send();
-  });
+  // /login is served by the SPA (history-API fallback); the panels fetch chain
+  // configuration from /v1/auth/config instead of receiving it via redirect.
 
   app.post("/logout", async (request, reply) => {
     clearWebSessionCookie(reply, isSecure(request));

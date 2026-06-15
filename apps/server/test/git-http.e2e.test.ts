@@ -290,34 +290,28 @@ test("serves normal git push and clone through smart HTTP", async () => {
     manifestCount: 1
   });
 
-  const anonymousHomeResponse = await fetch(new URL("/", baseUrl));
+  // All page URLs now serve the SPA shell; page content is client-rendered
+  // from the /v1 endpoints asserted below.
+  const anonymousHomeResponse = await fetch(new URL("/", baseUrl), { headers: { accept: "text/html" } });
   expect(anonymousHomeResponse.status).toBe(200);
   expect(anonymousHomeResponse.headers.get("content-type")).toContain("text/html");
   const anonymousHomeBody = await anonymousHomeResponse.text();
-  expect(anonymousHomeBody).toContain("<h1 class=\"landing-title\" id=\"landing-title\">");
-  expect(anonymousHomeBody).toContain("Octopus is a wallet-native Git platform");
-  expect(anonymousHomeBody).toContain("Connect wallet");
-  expect(anonymousHomeBody).not.toContain("Octopus account");
+  expect(anonymousHomeBody).toContain('<div id="root">');
   expect(anonymousHomeBody).not.toContain(repoId);
 
   const webSessionCookie = await createWebSessionCookie("/");
-  const webResponse = await fetch(new URL("/", baseUrl), {
-    headers: {
-      cookie: webSessionCookie
-    }
+  const sessionResponse = await fetch(new URL("/v1/auth/web-session", baseUrl), {
+    headers: { cookie: webSessionCookie }
   });
-  expect(webResponse.status).toBe(200);
-  expect(webResponse.headers.get("content-type")).toContain("text/html");
-  const webBody = await webResponse.text();
-  expect(webBody).toContain("Home");
-  expect(webBody).toContain(repoId);
-  expect(webBody).toContain("1 commit");
+  expect(sessionResponse.status).toBe(200);
+  await expect(sessionResponse.json()).resolves.toMatchObject({
+    authenticated: true,
+    walletAddress: delegate.address
+  });
 
-  const profileResponse = await fetch(new URL(`/${owner}`, baseUrl));
+  const profileResponse = await fetch(new URL(`/${owner}`, baseUrl), { headers: { accept: "text/html" } });
   expect(profileResponse.status).toBe(200);
-  const profileBody = await profileResponse.text();
-  expect(profileBody).toContain("Contribution activity");
-  expect(profileBody).toContain("Created 1 commit in 1 repository");
+  await expect(profileResponse.text()).resolves.toContain('<div id="root">');
 
   const indexResponse = await fetch(new URL(`/v1/repos/${owner}/demo/index`, baseUrl));
   expect(indexResponse.status).toBe(200);
@@ -373,25 +367,25 @@ test("serves normal git push and clone through smart HTTP", async () => {
     content: "hello octopus\n"
   });
 
-  const repoPageResponse = await fetch(new URL(`/${owner}/demo`, baseUrl));
+  const repoPageResponse = await fetch(new URL(`/${owner}/demo`, baseUrl), { headers: { accept: "text/html" } });
   expect(repoPageResponse.status).toBe(200);
-  const repoPage = await repoPageResponse.text();
-  const shortOwner = `${owner.slice(0, 6)}...${owner.slice(-4)}`;
-  expect(repoPage).toContain("README.md");
-  expect(repoPage).toContain("1 commits");
-  expect(repoPage).toContain(shortOwner);
-  expect(repoPage).not.toContain("Octopus Test</strong>");
-  expect(repoPage).toContain("entry-icon file");
-  expect(repoPage).toContain("Copy clone command");
-  expect(repoPage).toContain(`data-copy-text="git clone ${baseUrl}/${owner}/demo.git"`);
-  expect(repoPage).toContain("<h2>About</h2>");
-  expect(repoPage).toContain("No description, website, or topics provided.");
-  expect(repoPage).toContain("readme-panel");
-  expect(repoPage).toContain("hello octopus");
+  await expect(repoPageResponse.text()).resolves.toContain('<div id="root">');
 
-  const filePageResponse = await fetch(new URL(`/${owner}/demo/blob?path=README.md`, baseUrl));
+  const filePageResponse = await fetch(new URL(`/${owner}/demo/blob?path=README.md`, baseUrl), {
+    headers: { accept: "text/html" }
+  });
   expect(filePageResponse.status).toBe(200);
-  await expect(filePageResponse.text()).resolves.toContain("hello octopus");
+  await expect(filePageResponse.text()).resolves.toContain('<div id="root">');
+
+  // The single-repo JSON endpoint feeds the SPA repo page.
+  const repoJsonResponse = await fetch(new URL(`/v1/repos/${owner}/demo`, baseUrl));
+  expect(repoJsonResponse.status).toBe(200);
+  const repoJsonBody = (await repoJsonResponse.json()) as {
+    repo: { repoId: string; commitCount?: number };
+    contentUnlocked: boolean;
+  };
+  expect(repoJsonBody.repo).toMatchObject({ repoId, commitCount: 1 });
+  expect(repoJsonBody.contentUnlocked).toBe(true);
 
   const suiState = await readSuiRepoState(
     config,
@@ -696,42 +690,12 @@ test("opens pull requests from pushed branches", async () => {
   });
   expect(pullDetailBody.comparison.patch).toContain("from a pull request");
 
-  const pullListPageResponse = await fetch(new URL(`/${owner}/pr-demo/pulls`, baseUrl));
-  expect(pullListPageResponse.status).toBe(200);
-  const pullListPage = await pullListPageResponse.text();
-  expect(pullListPage).toContain("Pull requests");
-  expect(pullListPage).toContain("Update README");
-  expect(pullListPage).not.toContain("Open pull request");
-
-  const webSessionCookie = await createWebSessionCookie(`/${owner}/pr-demo/pulls`);
-  const signedPullListPageResponse = await fetch(new URL(`/${owner}/pr-demo/pulls`, baseUrl), {
-    headers: { cookie: webSessionCookie }
-  });
-  expect(signedPullListPageResponse.status).toBe(200);
-  const signedPullListPage = await signedPullListPageResponse.text();
-  expect(signedPullListPage).toContain("New pull request");
-  expect(signedPullListPage).toContain(`href="/${owner}/pr-demo/pulls/new"`);
-  expect(signedPullListPage).not.toContain("Open pull request");
-
-  const pullCreatePageResponse = await fetch(new URL(`/${owner}/pr-demo/pulls/new`, baseUrl), {
-    headers: { cookie: webSessionCookie }
-  });
-  expect(pullCreatePageResponse.status).toBe(200);
-  const pullCreatePage = await pullCreatePageResponse.text();
-  expect(pullCreatePage).toContain("Open pull request");
-  expect(pullCreatePage).toContain("feature/readme");
-  expect(pullCreatePage).toContain(`action="/${owner}/pr-demo/pulls"`);
-
-  const pullDetailPageResponse = await fetch(new URL(`/${owner}/pr-demo/pulls/1`, baseUrl));
-  expect(pullDetailPageResponse.status).toBe(200);
-  const pullDetailPage = await pullDetailPageResponse.text();
-  const shortOwner = `${owner.slice(0, 6)}...${owner.slice(-4)}`;
-  expect(pullDetailPage).toContain("Adds a second line.");
-  expect(pullDetailPage).toContain("feature/readme");
-  expect(pullDetailPage).toContain("README.md");
-  expect(pullDetailPage).toContain(shortOwner);
-  expect(pullDetailPage).not.toContain(">Octopus Test</td>");
-  expect(pullDetailPage).not.toContain("diff --git");
+  // PR page URLs are served by the SPA shell; their data comes from /v1.
+  for (const pagePath of [`/${owner}/pr-demo/pulls`, `/${owner}/pr-demo/pulls/new`, `/${owner}/pr-demo/pulls/1`]) {
+    const pageResponse = await fetch(new URL(pagePath, baseUrl), { headers: { accept: "text/html" } });
+    expect(pageResponse.status).toBe(200);
+    await expect(pageResponse.text()).resolves.toContain('<div id="root">');
+  }
 
   const duplicateResponse = await fetch(new URL(`/v1/repos/${owner}/pr-demo/pulls`, baseUrl), {
     method: "POST",
@@ -770,9 +734,17 @@ test("requires delegate headers for push and private fetch", async () => {
   expect(anonymousRepoList.status).toBe(200);
   await expect(anonymousRepoList.json()).resolves.toEqual({ repos: [] });
 
-  const anonymousPrivatePage = await fetch(new URL(`/${owner}/private-demo`, baseUrl));
-  expect(anonymousPrivatePage.status).toBe(401);
-  await expect(anonymousPrivatePage.text()).resolves.toContain("Sign in with your Sui wallet");
+  // The browser gets the SPA shell; the data request returns the structured
+  // login_required error that routes the SPA to the wallet login flow.
+  const anonymousPrivatePage = await fetch(new URL(`/${owner}/private-demo`, baseUrl), {
+    headers: { accept: "text/html" }
+  });
+  expect(anonymousPrivatePage.status).toBe(200);
+  await expect(anonymousPrivatePage.text()).resolves.toContain('<div id="root">');
+
+  const anonymousPrivateRepo = await fetch(new URL(`/v1/repos/${owner}/private-demo`, baseUrl));
+  expect(anonymousPrivateRepo.status).toBe(401);
+  await expect(anonymousPrivateRepo.json()).resolves.toMatchObject({ code: "login_required" });
 
   const anonymousPrivatePulls = await fetch(new URL(`/v1/repos/${owner}/private-demo/pulls`, baseUrl));
   expect(anonymousPrivatePulls.status).toBe(401);
@@ -818,11 +790,19 @@ test("requires delegate headers for push and private fetch", async () => {
   });
   expect(lockedPullsResponse.status).toBe(423);
 
-  const lockedPrivatePage = await fetch(new URL(`/${owner}/private-demo`, baseUrl), {
+  // Signed-in but locked: content endpoints answer repo_locked so the SPA can
+  // show the unlock flow; the page URL itself still serves the shell.
+  const lockedPrivateData = await fetch(new URL(`/v1/repos/${owner}/private-demo/index`, baseUrl), {
     headers: { cookie: webSessionCookie ?? "" }
   });
-  expect(lockedPrivatePage.status).toBe(423);
-  await expect(lockedPrivatePage.text()).resolves.toContain("Unlock repository");
+  expect(lockedPrivateData.status).toBe(423);
+  await expect(lockedPrivateData.json()).resolves.toMatchObject({ code: "repo_locked" });
+
+  const lockedPrivatePage = await fetch(new URL(`/${owner}/private-demo`, baseUrl), {
+    headers: { cookie: webSessionCookie ?? "", accept: "text/html" }
+  });
+  expect(lockedPrivatePage.status).toBe(200);
+  await expect(lockedPrivatePage.text()).resolves.toContain('<div id="root">');
 
   const unlockChallengeResponse = await fetch(
     new URL(`/v1/repos/${owner}/private-demo/unlock/challenge?returnTo=/${owner}/private-demo`, baseUrl),
@@ -858,13 +838,10 @@ test("requires delegate headers for push and private fetch", async () => {
 
   const contributorWallet = Ed25519Keypair.generate().getPublicKey().toSuiAddress();
   const accessPageResponse = await fetch(new URL(`/${owner}/private-demo/settings/access`, baseUrl), {
-    headers: { cookie: webSessionCookie ?? "" }
+    headers: { cookie: webSessionCookie ?? "", accept: "text/html" }
   });
   expect(accessPageResponse.status).toBe(200);
-  const accessPage = await accessPageResponse.text();
-  expect(accessPage).toContain("Contributors");
-  expect(accessPage).toContain("0x wallet address");
-  expect(accessPage).toContain(`action="/${owner}/private-demo/contributors"`);
+  await expect(accessPageResponse.text()).resolves.toContain('<div id="root">');
 
   const addContributorResponse = await fetch(new URL(`/${owner}/private-demo/contributors`, baseUrl), {
     method: "POST",
@@ -885,21 +862,13 @@ test("requires delegate headers for push and private fetch", async () => {
   const contributorState = await readSuiRepoState(config, owner, "private-demo");
   expect(contributorState?.writers).toContain(contributorWallet.toLowerCase());
 
-  const contributorPageResponse = await fetch(new URL(`/${owner}/private-demo`, baseUrl), {
+  // The SPA's access page reads contributors from the single-repo endpoint.
+  const updatedRepoResponse = await fetch(new URL(`/v1/repos/${owner}/private-demo`, baseUrl), {
     headers: { cookie: webSessionCookie ?? "" }
   });
-  expect(contributorPageResponse.status).toBe(200);
-  const contributorPage = await contributorPageResponse.text();
-  expect(contributorPage).toContain("Settings");
-  expect(contributorPage).toContain(`href="/${owner}/private-demo/settings/access"`);
-  expect(contributorPage).not.toContain("0x wallet address");
-
-  const updatedAccessPageResponse = await fetch(new URL(`/${owner}/private-demo/settings/access`, baseUrl), {
-    headers: { cookie: webSessionCookie ?? "" }
-  });
-  expect(updatedAccessPageResponse.status).toBe(200);
-  const updatedAccessPage = await updatedAccessPageResponse.text();
-  expect(updatedAccessPage).toContain(contributorWallet.slice(0, 6));
+  expect(updatedRepoResponse.status).toBe(200);
+  const updatedRepoBody = (await updatedRepoResponse.json()) as { repo: { writers: string[] } };
+  expect(updatedRepoBody.repo.writers).toContain(contributorWallet.toLowerCase());
 
   const authorizedRepoList = await fetch(new URL("/v1/repos", baseUrl), {
     headers: delegateHeaders()

@@ -10,6 +10,7 @@ import { healthRoutes } from "./health.js";
 import { pullRequestRoutes } from "./pull-request-routes.js";
 import { repoRoutes } from "./repo-routes.js";
 import { createRouteContext, type RouteContext } from "./route-context.js";
+import { spaRoutes } from "./spa.js";
 
 export type RouteDeps = {
   config: ServerConfig;
@@ -35,4 +36,6 @@ export const registerRoutes = (
   app.register(repoRoutes, deps);
   app.register(pullRequestRoutes, deps);
   app.register(gitHttpRoutes, deps);
+  // Last: SPA bundle + index.html fallback for unmatched page URLs.
+  app.register(spaRoutes, deps);
 };

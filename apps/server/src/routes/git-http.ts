@@ -9,6 +9,8 @@ export const gitHttpRoutes = async (app: FastifyInstance, deps: RouteDeps) => {
       return;
     }
 
-    await reply.code(404).send({ error: "Not found" });
+    // Everything else falls through to the not-found handler, which serves the
+    // SPA bundle + index.html fallback (see routes/spa.ts).
+    return reply.callNotFound();
   });
 };

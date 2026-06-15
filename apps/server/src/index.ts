@@ -1,7 +1,9 @@
 import { buildServer } from "./app.js";
 import { loadConfig } from "./config/env.js";
+import { assertGitVersionSupportsMergeTree } from "./git.js";
 
 const config = loadConfig();
+await assertGitVersionSupportsMergeTree();
 const server = buildServer(config);
 
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {

@@ -43,6 +43,33 @@ export const createPullRequestRequestSchema = z.object({
 
 export type CreatePullRequestRequest = z.infer<typeof createPullRequestRequestSchema>;
 
+export const pullRequestStatusSchema = z.enum(["open", "closed", "merged"]);
+
+export type PullRequestStatusValue = z.infer<typeof pullRequestStatusSchema>;
+
+export const pullRequestMergeStrategySchema = z.enum(["merge", "squash", "fast-forward"]);
+
+export type PullRequestMergeStrategy = z.infer<typeof pullRequestMergeStrategySchema>;
+
+export const commitDigestSchema = z.string().regex(/^[0-9a-f]{40,64}$/);
+
+export const mergePullRequestRequestSchema = z.object({
+  strategy: pullRequestMergeStrategySchema.default("merge"),
+  expectedHeadCommit: commitDigestSchema,
+  deleteBranch: z
+    .union([z.boolean(), z.enum(["true", "false", "on", ""])])
+    .default(false)
+    .transform((value) => value === true || value === "true" || value === "on")
+});
+
+export type MergePullRequestRequest = z.infer<typeof mergePullRequestRequestSchema>;
+
+export const createPullRequestCommentRequestSchema = z.object({
+  body: z.string().trim().min(1).max(10_000)
+});
+
+export type CreatePullRequestCommentRequest = z.infer<typeof createPullRequestCommentRequestSchema>;
+
 export const gitDelegateKeyHeader = "x-octopus-delegate-key";
 export const gitAccountIdHeader = "x-octopus-account-id";
 export const delegateAuthTokenHeader = "x-octopus-auth-token";
@@ -130,6 +157,8 @@ export type RepoSummary = {
   visibility: z.infer<typeof repoVisibilitySchema>;
   gitRemotePath: string;
 };
+
+export * from "./view-models.js";
 
 export const envInt = (value: string | undefined, fallback: number): number => {
   if (!value) {

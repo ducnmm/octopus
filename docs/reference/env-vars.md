@@ -42,10 +42,12 @@ cp .env.example .env
 | `OCTOPUS_PORT` | `48787` | Preferred local server port. |
 | `PORT` | `48787` when `OCTOPUS_PORT` is absent | Hosting platform port fallback. |
 | `OCTOPUS_DATA_DIR` | `./data` | Server data root. |
-| `OCTOPUS_WEB_URL` | `http://127.0.0.1:45173` | Wallet login app URL advertised by `/v1/auth/config`. |
+| `OCTOPUS_WEB_URL` | `http://127.0.0.1:45173` | Web app origin allowed for credentialed CORS (dev) and advertised by `/v1/auth/config`. |
+| `OCTOPUS_WEB_DIST_DIR` | Resolved from the `@octopus/web` package | Directory of the built web SPA the server serves (assets + `index.html` fallback). |
 | `DATABASE_URL` | Empty | Optional Postgres URL for scaffolded DB-backed paths. |
 | `OCTOPUS_WEB_SESSION_SECRET` | Deterministic hash of data dir | Use a real stable secret in production. |
 | `OCTOPUS_DELEGATE_CACHE_TTL_MS` | `60000` | Server-side delegate verification cache TTL. |
+| `OCTOPUS_AGENTATION_ENDPOINT` | Empty | Dev only. When set (e.g. `http://localhost:4747`), injects the Agentation feedback toolbar into server-rendered HTML pages. Leave unset in production. |
 | `OCTOPUS_BUILD_SHA` | Empty | Optional build metadata in server responses. |
 | `OCTOPUS_INDEX_TREE_LIMIT` | `5000` | Max indexed tree entries before truncation. |
 | `OCTOPUS_BLOB_VIEW_LIMIT_BYTES` | `1048576` | Max blob bytes shown by file viewer/API. |
@@ -136,3 +138,9 @@ Private pushes to durable Walrus storage (`cli` or relay modes) require
 | `RAILWAY_GIT_COMMIT_SHA` | Server | Optional build metadata. |
 | `RAILWAY_DEPLOYMENT_ID` | Server | Optional build metadata. |
 | `RAILWAY_SERVICE_NAME` | Server | Optional build metadata. |
+
+## Runtime Requirements
+
+The server requires `git` >= 2.38 on its PATH: pull-request merges use
+`git merge-tree --write-tree`, which first shipped in Git 2.38. The server
+asserts this at startup and refuses to boot with an older Git.
