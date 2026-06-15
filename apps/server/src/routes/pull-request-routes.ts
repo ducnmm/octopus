@@ -94,5 +94,4 @@ export const pullRequestRoutes = async (app: FastifyInstance, deps: RouteDeps) =
     );
     await reply.code(201).send({ comment });
   });
-
 };
